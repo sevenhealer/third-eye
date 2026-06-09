@@ -61,7 +61,7 @@ async def main() -> None:
         sys.exit(1)
 
     weights_dir = ROOT / "models" / "weights"
-    if not (weights_dir / "buffalo_l").exists():
+    if not (weights_dir / "models" / "buffalo_l").exists():
         print("ERROR: Run python scripts/download_models.py first")
         sys.exit(1)
 

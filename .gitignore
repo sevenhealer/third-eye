@@ -16,10 +16,8 @@ build/
 .eggs/
 *.whl
 
-# Virtual environments
+# Virtual environment
 .venv/
-venv/
-env/
 
 # Models (large binary files — track with DVC instead)
 models/weights/*.pt
