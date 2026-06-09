@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+from src.core.database import get_db_session
 from src.core.exceptions import GalleryError
 from src.core.logging import get_logger
 from src.face_recognition.recognizer import (
@@ -44,7 +45,6 @@ class FaceGallery:
         Raises:
             GalleryError: On database failure.
         """
-        from src.core.database import get_db_session  # local import avoids startup cost
         query_vec = l2_normalize(embedding)
 
         try:
@@ -82,7 +82,6 @@ class FaceGallery:
         Returns the new embedding_id (UUID).
         Raises GalleryError on failure.
         """
-        from src.core.database import get_db_session
         embedding_id = str(uuid.uuid4())
         vec = l2_normalize(embedding).tolist()
         try:
@@ -112,7 +111,6 @@ class FaceGallery:
         Returns the count of deleted rows.
         Raises GalleryError on failure.
         """
-        from src.core.database import get_db_session
         try:
             async with get_db_session() as session:
                 result = await session.execute(
