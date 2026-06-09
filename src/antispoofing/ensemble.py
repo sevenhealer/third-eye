@@ -150,11 +150,13 @@ class AntiSpoofingEnsemble:
         cdcn: CDCNWrapper | None = None,
         temporal: TemporalConsistencyChecker | None = None,
         confidence_threshold: float = MIN_CONFIDENCE,
+        dev_bypass: bool = False,
     ) -> None:
         self.minifas = minifas if minifas is not None else MiniFASWrapper()
         self.cdcn = cdcn if cdcn is not None else CDCNWrapper()
         self.temporal = temporal if temporal is not None else TemporalConsistencyChecker()
         self.confidence_threshold = confidence_threshold
+        self.dev_bypass = dev_bypass
 
     def _check_model(self, name: str, score: float) -> None:
         """Enforce confidence gate for a single model score."""
@@ -186,6 +188,14 @@ class AntiSpoofingEnsemble:
             SpoofingDetectedError: Any model rejects the presentation.
             LowConfidenceError:    Any model score is in (0, threshold).
         """
+        if self.dev_bypass:
+            logger.warning("antispoofing_bypassed_dev_mode", track_id=track_id)
+            return SpoofingResult(
+                is_live=True, confidence=1.0,
+                minifas_score=1.0, cdcn_score=1.0, temporal_score=1.0,
+                rejected_by=None,
+            )
+
         if raw_frame is not None:
             self.temporal.update(track_id, raw_frame)
 
