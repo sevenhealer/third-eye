@@ -16,14 +16,16 @@ class ObjectPipelineResult:
     class_name: str
     bbox: np.ndarray     # [x1, y1, x2, y2]
     confidence: float
+    global_id: str | None = None   # UUID set by CrossCameraCoordinator; None for single-camera pipelines
 
 
 class ObjectPipeline:
     """
-    Layer 5 + 7: YOLODetector → ByteTracker.
+    Layer 5 + 7: YOLODetector → tracker (ByteTracker or StrongSortTracker).
 
     Produces per-frame list of confirmed tracked objects with stable track IDs.
     All dependencies injected — use mocks in tests.
+    global_id is populated by the caller after cross-camera coordination.
     """
 
     def __init__(self, detector: YOLODetector, tracker: ByteTracker) -> None:
@@ -34,7 +36,7 @@ class ObjectPipeline:
         self, frame: np.ndarray, meta: FrameMeta
     ) -> list[ObjectPipelineResult]:
         detections: list[ObjectDetection] = self._detector.detect(frame)
-        tracked: list[TrackedObject] = self._tracker.update(detections)
+        tracked = self._tracker.update(detections)
         return [
             ObjectPipelineResult(
                 track_id=t.track_id,

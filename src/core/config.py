@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     alert_email_to: str = ""
     alert_email_password: str = ""
 
+    # ── ReID / Cross-camera tracking ─────────────────────────────────────────
+    reid_match_threshold: float = 0.70    # cosine similarity threshold for cross-camera identity linkage
+    reid_iou_weight: float = 0.5          # weight of IoU vs. appearance in StrongSORT cost matrix
+
     # ── Retention ─────────────────────────────────────────────────────────────
     event_retention_days: int = 90
     audit_log_retention_days: int = 365
