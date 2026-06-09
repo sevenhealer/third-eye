@@ -38,7 +38,7 @@ async def write_audit_event(
                  prev_hash)
             VALUES
                 (:actor_id, :actor_username, :action_type,
-                 :resource_type, :resource_id, :details::jsonb, :source_ip,
+                 :resource_type, :resource_id, CAST(:details AS jsonb), :source_ip,
                  (SELECT COALESCE(
                      (SELECT current_hash FROM audit_log ORDER BY log_id DESC LIMIT 1),
                      '0000000000000000000000000000000000000000000000000000000000000000'

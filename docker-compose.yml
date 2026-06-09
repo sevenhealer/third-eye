@@ -98,7 +98,7 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
-      - ./infrastructure/neo4j/init.cypher:/var/lib/neo4j/import/init.cypher:ro
+      - ./infrastructure/neo4j/init.cypher:/var/lib/neo4j/import/init.cypher
     ports:
       - "127.0.0.1:7474:7474"
       - "127.0.0.1:7687:7687"
@@ -133,7 +133,7 @@ services:
       - "127.0.0.1:9092:9092"
     networks: [backend]
     healthcheck:
-      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -154,8 +154,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    <<: [*restart, *logging]
-    <<: *gpu
+    <<: [*restart, *logging, *gpu]
     volumes:
       - ollama_models:/root/.ollama
     ports:
@@ -337,7 +336,7 @@ services:
       - mlflow_data:/mlflow
       - ./models:/mlflow/artifacts/models:ro
     ports:
-      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:5001:5000"
     command: >
       mlflow server
       --backend-store-uri sqlite:///mlflow/mlflow.db

@@ -205,23 +205,34 @@ CREATE TABLE IF NOT EXISTS audit_log (
     details         JSONB DEFAULT '{}',
     source_ip       INET,
     prev_hash       VARCHAR(64) DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
-    current_hash    VARCHAR(64) GENERATED ALWAYS AS (
-        encode(
-            sha256(
-                (   COALESCE(log_id::text, '')
-                 || COALESCE(event_time::text, '')
-                 || COALESCE(actor_id::text, '')
-                 || COALESCE(action_type, '')
-                 || COALESCE(resource_type, '')
-                 || COALESCE(resource_id, '')
-                 || COALESCE(details::text, '')
-                 || COALESCE(prev_hash, '')
-                )::bytea
-            ),
-            'hex'
-        )
-    ) STORED
+    current_hash    VARCHAR(64)
 );
+
+-- Trigger computes hash on insert (trigger can be VOLATILE unlike generated columns)
+CREATE OR REPLACE FUNCTION audit_log_compute_hash()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.current_hash := encode(
+        sha256(
+            (   COALESCE(NEW.log_id::text, '')
+             || COALESCE(NEW.event_time::text, '')
+             || COALESCE(NEW.actor_id::text, '')
+             || COALESCE(NEW.action_type, '')
+             || COALESCE(NEW.resource_type, '')
+             || COALESCE(NEW.resource_id, '')
+             || COALESCE(NEW.details::text, '')
+             || COALESCE(NEW.prev_hash, '')
+            )::bytea
+        ),
+        'hex'
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_hash_trigger
+    BEFORE INSERT ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION audit_log_compute_hash();
 
 -- Prevent any modification of audit log rows
 CREATE OR REPLACE RULE no_update_audit AS
@@ -245,6 +256,6 @@ ON CONFLICT (zone_id) DO NOTHING;
 -- Password: 'admin' (bcrypt hash — MUST change in production)
 INSERT INTO users (username, email, hashed_pw, role) VALUES
     ('admin', 'admin@thirdeye.local',
-     '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW',
+     '$2b$12$FoRGNhcvclP37fxEq0OkUefCpAntmZJPYM47//vEtglRTmzkrow8q',
      'admin')
 ON CONFLICT (username) DO NOTHING;

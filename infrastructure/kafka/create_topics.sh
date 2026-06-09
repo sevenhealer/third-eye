@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-BOOTSTRAP="localhost:9092"
+BOOTSTRAP="kafka:9092"
 echo "[kafka-init] Waiting for Kafka to be ready..."
 sleep 10
 
@@ -10,7 +10,7 @@ create_topic() {
     local partitions=$2
     local retention_ms=$3
 
-    kafka-topics.sh \
+    /opt/kafka/bin/kafka-topics.sh \
         --bootstrap-server "$BOOTSTRAP" \
         --create \
         --if-not-exists \
@@ -52,4 +52,4 @@ create_topic "alerts.outbound"  2   604800000  # 7 days
 create_topic "feedback.corrections" 2   2592000000  # 30 days
 
 echo "[kafka-init] All topics created successfully."
-kafka-topics.sh --bootstrap-server "$BOOTSTRAP" --list
+/opt/kafka/bin/kafka-topics.sh --bootstrap-server "$BOOTSTRAP" --list
