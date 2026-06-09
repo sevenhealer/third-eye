@@ -68,6 +68,9 @@ class CDCNWrapper:
     detection (~11 ms/crop). Activated in Phase 2 when weights are available.
 
     Returns 0.0 (fail-safe deny) when not loaded.
+
+    Use load_from_checkpoint() to create a production-ready instance backed by
+    the CDCNPlusPlus PyTorch model from src.antispoofing.cdcn.
     """
 
     def __init__(self, model: Any = None) -> None:
@@ -78,6 +81,36 @@ class CDCNWrapper:
         if self._model is None:
             return 0.0
         return float(self._model(face_crop))
+
+    @classmethod
+    def load_from_checkpoint(cls, weights_path: str, device: str = "cpu") -> "CDCNWrapper":
+        """
+        Load CDCN++ weights from a .pt checkpoint and return a ready wrapper.
+
+        The returned wrapper's score() preprocesses the face crop and runs
+        the CDCNPlusPlus model entirely within a torch.no_grad context.
+        """
+        from pathlib import Path as _Path
+
+        from src.antispoofing.cdcn import load_cdcn_model, preprocess_face
+
+        model = load_cdcn_model(_Path(weights_path), device=device)
+
+        if _TORCH_AVAILABLE:
+            import torch as _torch
+
+            def _infer(face_crop: np.ndarray) -> float:
+                tensor = preprocess_face(face_crop)
+                if tensor is None:
+                    return 0.0
+                with _torch.no_grad():
+                    return float(model(tensor.to(device)).item())
+
+        else:  # pragma: no cover
+            def _infer(face_crop: np.ndarray) -> float:  # type: ignore[misc]
+                return 0.0
+
+        return cls(model=_infer)
 
 
 class TemporalConsistencyChecker:

@@ -78,14 +78,20 @@ class Settings(BaseSettings):
     audit_log_retention_days: int = 365
     video_archive_retention_days: int = 30
 
+    # ── Model registry ────────────────────────────────────────────────────────
+    model_manifest_path: Path = Path("/app/models/manifest.json")
+
     # ── Encryption ────────────────────────────────────────────────────────────
     embedding_encryption_key: str = ""
 
     @field_validator("device")
     @classmethod
     def validate_device(cls, v: str) -> str:
-        import torch
-        if v.startswith("cuda") and not torch.cuda.is_available():
+        try:
+            import torch
+            if v.startswith("cuda") and not torch.cuda.is_available():
+                return "cpu"
+        except ImportError:
             return "cpu"
         return v
 

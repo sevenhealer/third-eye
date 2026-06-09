@@ -20,6 +20,8 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("third_eye_starting", env=settings.app_env)
+    from src.core.model_registry import startup_verify
+    startup_verify(settings.model_manifest_path)
     # Warm up connections
     await get_redis()
     get_neo4j_driver()
