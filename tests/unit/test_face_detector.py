@@ -34,8 +34,9 @@ def test_compute_quality_small_face_returns_zero():
 
 
 def test_compute_quality_large_face_returns_positive():
-    # 100×100 bright crop: no cv2 → laplacian_variance returns 500.0 → score 1.0
-    crop = np.ones((100, 100, 3), dtype=np.uint8) * 200
+    # Checkerboard crop has high Laplacian variance → quality > 0 with or without cv2
+    crop = np.zeros((100, 100, 3), dtype=np.uint8)
+    crop[::2, :] = 255
     bbox = np.array([0.0, 0.0, 100.0, 100.0])
     quality = compute_quality(crop, bbox)
     assert quality > 0.0
@@ -67,7 +68,9 @@ def test_quality_filter_passes_large_sharp_faces():
         np.zeros((1, 5, 2)),
     )
     detector._model = mock_model
-    frame = np.ones((480, 640, 3), dtype=np.uint8) * 200
+    # Checkerboard frame → high Laplacian variance → quality passes filter
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[::2, :] = 200
     results = detector.detect(frame)
     assert len(results) == 1
     r = results[0]
@@ -87,7 +90,9 @@ def test_detect_clips_bbox_to_frame_bounds():
         np.zeros((1, 5, 2)),
     )
     detector._model = mock_model
-    frame = np.ones((480, 640, 3), dtype=np.uint8) * 180
+    # Checkerboard frame → face crop has non-zero Laplacian → quality passes
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[::2, :] = 180
     results = detector.detect(frame)
     assert len(results) == 1
     x1, y1, x2, y2 = results[0].bbox

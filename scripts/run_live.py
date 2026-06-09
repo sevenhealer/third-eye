@@ -112,7 +112,7 @@ def _check_deps() -> None:
 
 
 def _check_weights(weights_dir: Path) -> None:
-    buffalo = weights_dir / "buffalo_l"
+    buffalo = weights_dir / "models" / "buffalo_l"
     if not buffalo.exists() or not any(buffalo.iterdir()):
         print(f"ERROR: Weights not found at {buffalo}")
         print("Run:  python scripts/download_models.py")
@@ -170,6 +170,12 @@ async def main() -> None:
     print("=" * 62)
     print("\nPress Ctrl+C to stop.\n")
 
+    from src.object_detection.detector import ObjectDetection
+    from src.tracking.tracker import ByteTracker
+
+    tracker = ByteTracker(max_age=30, min_hits=3, iou_threshold=0.3,
+                          high_threshold=0.5, low_threshold=0.1)
+
     camera = CameraReader(source=source)
     if not camera.open():
         print(f"ERROR: Cannot open camera '{source}'")
@@ -179,7 +185,7 @@ async def main() -> None:
         sys.exit(1)
 
     frame_count = 0
-    total_faces = 0
+    unique_ids: set[int] = set()
     producer = FrameProducer(
         camera=camera,
         camera_id=args.camera_id,
@@ -188,30 +194,46 @@ async def main() -> None:
     )
 
     async def process_frame(frame, meta) -> None:
-        nonlocal frame_count, total_faces
+        nonlocal frame_count
         frame_count += 1
 
-        faces = app.get(frame)
-        total_faces += len(faces)
+        raw_faces = app.get(frame)
 
-        for face in faces:
-            bbox = face.bbox.astype(int)
-            det_score = float(face.det_score)
+        # Wrap insightface detections as ObjectDetection for ByteTracker
+        import numpy as _np
+        dets: list[ObjectDetection] = []
+        for face in raw_faces:
+            dets.append(
+                ObjectDetection(
+                    bbox=face.bbox.astype("float32"),
+                    class_id=0,
+                    class_name="person",
+                    confidence=float(face.det_score),
+                )
+            )
+
+        tracked = tracker.update(dets)
+        for t in tracked:
+            unique_ids.add(t.track_id)
+
+        for t in tracked:
+            bbox = t.bbox.astype(int)
             print(
                 f"[{meta.camera_id} | frame {meta.frame_id:>5}]  "
+                f"track={t.track_id:>3}  "
                 f"bbox=[{bbox[0]:4},{bbox[1]:4},{bbox[2]:4},{bbox[3]:4}]  "
-                f"conf={det_score:.3f}"
+                f"conf={t.confidence:.3f}"
             )
             if args.show:
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 0), 2)
                 cv2.putText(
-                    frame, f"{det_score:.2f}",
+                    frame, f"ID:{t.track_id}",
                     (bbox[0], max(bbox[1] - 8, 0)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 0), 2,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 0), 2,
                 )
 
-        if frame_count % 30 == 0 and not faces:
-            print(f"  — {frame_count} frames, {total_faces} detections so far —")
+        if frame_count % 30 == 0 and not tracked:
+            print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
 
         if args.show:
             cv2.imshow("third-eye | live  (q to quit)", frame)
@@ -226,7 +248,7 @@ async def main() -> None:
         camera.release()
         if args.show:
             cv2.destroyAllWindows()
-        print(f"\nStopped — {frame_count} frames, {total_faces} face detections.")
+        print(f"\nStopped — {frame_count} frames, {len(unique_ids)} unique person ID(s).")
 
 
 if __name__ == "__main__":
