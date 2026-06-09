@@ -2,33 +2,41 @@
 """
 Live camera feed — face detection and recognition.
 
-Works on macOS (FaceTime/USB camera, CPU inference) and Linux with RTX 3090
-(CUDA inference). GPU vs CPU is detected automatically from ONNX Runtime.
+Platform support:
+  macOS M1/M2/M3/M4  — CPU + CoreML (Neural Engine), ARM64 native
+  Linux RTX 3090      — CUDA GPU
 
-Usage:
-  python scripts/run_live.py --source 0           # default camera
-  python scripts/run_live.py --source 0 --show    # display cv2 window
-  python scripts/run_live.py --source rtsp://...  # IP camera
-  python scripts/run_live.py --source 0 --bypass-antispoofing   # dev mode
-
-Mac install:
+Install (M4 Mac):
+  brew install cmake                              # needed to compile insightface
+  .venv/bin/pip install cython scikit-build-core
   .venv/bin/pip install insightface onnxruntime opencv-python numpy
 
-Linux (RTX 3090) install:
+Install (Linux CUDA):
   .venv/bin/pip install insightface onnxruntime-gpu opencv-python-headless numpy
 
 Prerequisites:
-  python scripts/download_models.py        # download weights first (~200 MB)
-  docker compose up -d postgres redis      # only needed for gallery lookups
+  python scripts/download_models.py        # one-time, ~200 MB
+  docker compose up -d postgres redis      # only for gallery lookups
+
+Usage:
+  python scripts/run_live.py --source 0                          # built-in camera
+  python scripts/run_live.py --source 0 --show                   # display window
+  python scripts/run_live.py --source rtsp://192.168.1.x/stream  # IP camera
+  python scripts/run_live.py --source 0 --bypass-antispoofing    # skip liveness (dev)
+  python scripts/run_live.py --source 0 --cpu                    # force CPU only
 """
 import argparse
 import asyncio
 import os
+import platform
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+ON_MAC = platform.system() == "Darwin"
+ON_APPLE_SILICON = ON_MAC and platform.machine() == "arm64"
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,70 +46,76 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--camera-id", default="cam0")
     p.add_argument("--zone-id", default="entrance")
     p.add_argument("--fps", type=int, default=10,
-                   help="Target processing FPS (default 10; reduce if CPU is slow)")
+                   help="Target processing FPS (default 10)")
     p.add_argument("--show", action="store_true",
-                   help="Open a cv2 window with bounding boxes (requires opencv-python, not headless)")
+                   help="Open a cv2 window (requires opencv-python, not headless)")
     p.add_argument("--cpu", action="store_true",
-                   help="Force CPU inference even if CUDA is available")
+                   help="Force CPU-only inference")
     p.add_argument("--bypass-antispoofing", action="store_true",
                    help="Skip liveness check — DEV MODE ONLY")
     return p.parse_args()
 
 
-def _onnx_ctx_id(force_cpu: bool = False) -> int:
-    """Return 0 (GPU/CUDA) or -1 (CPU) based on available ONNX providers."""
+def _detect_inference(force_cpu: bool) -> tuple[int, str]:
+    """
+    Returns (ctx_id, description) for insightface.prepare().
+    ctx_id  0 → CUDA GPU
+    ctx_id -1 → CPU (or CoreML on Apple Silicon, handled inside onnxruntime)
+    """
     if force_cpu:
-        return -1
+        return -1, "CPU (forced)"
     try:
         import onnxruntime as ort
-        if "CUDAExecutionProvider" in ort.get_available_providers():
-            return 0
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in providers:
+            return 0, "GPU (CUDA)"
+        if "CoreMLExecutionProvider" in providers and ON_APPLE_SILICON:
+            # insightface uses ctx_id=-1 → CPUExecutionProvider by default,
+            # but onnxruntime on Apple Silicon will also try CoreML for compatible ops
+            return -1, "CPU + CoreML (Apple Neural Engine)"
     except ImportError:
         pass
-    return -1
+    return -1, "CPU"
 
 
 def _check_deps() -> None:
-    import platform
-    on_mac = platform.system() == "Darwin"
-
-    missing_pkgs: list[str] = []
-    missing_display: list[str] = []
-
+    missing: list[str] = []
     try:
         import cv2  # noqa: F401
     except ImportError:
-        # On Mac, opencv-python (not headless) works for both capture and imshow
-        missing_pkgs.append("opencv-python" if on_mac else "opencv-python-headless")
-        missing_display.append("opencv-python" if on_mac else "opencv-python-headless")
-
+        missing.append("opencv-python")        # need full (not headless) for imshow on Mac
     try:
         import insightface  # noqa: F401
     except ImportError:
-        missing_pkgs.append("insightface")
-
+        missing.append("insightface")
     try:
         import onnxruntime  # noqa: F401
     except ImportError:
-        # onnxruntime-gpu only exists for Linux+CUDA
-        missing_pkgs.append("onnxruntime" if on_mac else "onnxruntime-gpu")
-
+        missing.append("onnxruntime-gpu" if not ON_MAC else "onnxruntime")
     try:
         import numpy  # noqa: F401
     except ImportError:
-        missing_pkgs.append("numpy")
+        missing.append("numpy")
 
-    if missing_pkgs:
-        print("ERROR: Missing dependencies. Install with:")
-        print(f"  .venv/bin/pip install {' '.join(missing_pkgs)}")
+    if missing:
+        print("ERROR: Missing dependencies:")
+        for pkg in missing:
+            print(f"  {pkg}")
+        if ON_APPLE_SILICON:
+            print("\nFor Apple Silicon (M1/M2/M3/M4):")
+            print("  brew install cmake")
+            print("  .venv/bin/pip install cython scikit-build-core")
+            print(f"  .venv/bin/pip install {' '.join(missing)}")
+        else:
+            print(f"\n  .venv/bin/pip install {' '.join(missing)}")
         sys.exit(1)
 
 
 def _check_weights(weights_dir: Path) -> None:
     buffalo = weights_dir / "buffalo_l"
     if not buffalo.exists() or not any(buffalo.iterdir()):
-        print(f"ERROR: Model weights not found at {buffalo}")
-        print("Run first:  python scripts/download_models.py")
+        print(f"ERROR: Weights not found at {buffalo}")
+        print("Run:  python scripts/download_models.py")
         sys.exit(1)
 
 
@@ -132,8 +146,7 @@ async def main() -> None:
     from src.ingestion.camera import CameraReader
     from src.ingestion.frame_producer import FrameProducer
 
-    ctx_id = _onnx_ctx_id(force_cpu=args.cpu)
-    inference_mode = "CPU" if ctx_id == -1 else "GPU (CUDA)"
+    ctx_id, inference_label = _detect_inference(force_cpu=args.cpu)
 
     try:
         source: str | int = int(args.source)
@@ -146,11 +159,12 @@ async def main() -> None:
     print("OK\n")
 
     print("=" * 62)
+    print(f"  platform        : {platform.system()} {platform.machine()}")
     print(f"  source          : {source}")
     print(f"  camera-id       : {args.camera_id}")
     print(f"  zone-id         : {args.zone_id}")
     print(f"  fps target      : {args.fps}")
-    print(f"  inference       : {inference_mode}")
+    print(f"  inference       : {inference_label}")
     print(f"  display window  : {'yes  (press q to quit)' if args.show else 'no'}")
     print(f"  anti-spoofing   : {'BYPASSED — dev mode' if args.bypass_antispoofing else 'enabled'}")
     print("=" * 62)
@@ -159,7 +173,9 @@ async def main() -> None:
     camera = CameraReader(source=source)
     if not camera.open():
         print(f"ERROR: Cannot open camera '{source}'")
-        print("  macOS tip: check System Settings → Privacy → Camera and grant access to Terminal.")
+        if ON_MAC:
+            print("  macOS: check System Settings → Privacy & Security → Camera")
+            print("         and grant access to Terminal (or your IDE).")
         sys.exit(1)
 
     frame_count = 0
@@ -210,7 +226,7 @@ async def main() -> None:
         camera.release()
         if args.show:
             cv2.destroyAllWindows()
-        print(f"\nStopped — {frame_count} frames processed, {total_faces} face detections.")
+        print(f"\nStopped — {frame_count} frames, {total_faces} face detections.")
 
 
 if __name__ == "__main__":
