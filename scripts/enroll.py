@@ -67,8 +67,14 @@ async def main() -> None:
 
     _set_minimal_env()
 
+    try:
+        import onnxruntime as ort
+        ctx_id = 0 if "CUDAExecutionProvider" in ort.get_available_providers() else -1
+    except ImportError:
+        ctx_id = -1
+
     app = FaceAnalysis(name="buffalo_l", root=str(weights_dir))
-    app.prepare(ctx_id=0, det_size=(640, 640))
+    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
     try:
         source: str | int = int(args.source)
