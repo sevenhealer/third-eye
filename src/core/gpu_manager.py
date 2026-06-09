@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import AsyncIterator, Iterator
 
-import torch
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    _TORCH_AVAILABLE = False
 
 from src.core.exceptions import VRAMBudgetError
 from src.core.logging import get_logger
@@ -73,7 +78,7 @@ class GPUManager:
 
     def __init__(self, device: str = "cuda:0") -> None:
         self.device = device
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._entries: dict[str, ModelEntry] = {
             name: ModelEntry(name=name, vram_mb=mb)
             for name, mb in VRAM_ALLOCATIONS.items()
@@ -82,7 +87,7 @@ class GPUManager:
 
     @property
     def total_vram_mb(self) -> int:
-        if not torch.cuda.is_available():
+        if not _TORCH_AVAILABLE or not torch.cuda.is_available():
             return 0
         return torch.cuda.get_device_properties(self.device).total_memory // (1024 * 1024)
 
