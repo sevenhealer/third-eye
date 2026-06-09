@@ -1,0 +1,62 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    system: third-eye
+
+alerting:
+  alertmanagers: []
+
+rule_files: []
+
+scrape_configs:
+  - job_name: "api"
+    static_configs:
+      - targets: ["api:8000"]
+    metrics_path: /metrics
+
+  - job_name: "ingestion"
+    static_configs:
+      - targets: ["ingestion:8001"]
+    metrics_path: /metrics
+
+  - job_name: "face-pipeline"
+    static_configs:
+      - targets: ["face-pipeline:8002"]
+    metrics_path: /metrics
+
+  - job_name: "object-pipeline"
+    static_configs:
+      - targets: ["object-pipeline:8003"]
+    metrics_path: /metrics
+
+  - job_name: "event-engine"
+    static_configs:
+      - targets: ["event-engine:8004"]
+    metrics_path: /metrics
+
+  - job_name: "memory-service"
+    static_configs:
+      - targets: ["memory-service:8005"]
+    metrics_path: /metrics
+
+  - job_name: "nlq-service"
+    static_configs:
+      - targets: ["nlq-service:8006"]
+    metrics_path: /metrics
+
+  - job_name: "kafka"
+    static_configs:
+      - targets: ["kafka:9092"]
+
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres:5432"]
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

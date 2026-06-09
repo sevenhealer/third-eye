@@ -1,0 +1,41 @@
+cameras:
+  - camera_id: cam-01
+    display_name: "Entrance Camera"
+    stream_url: "rtsps://cam01:password@192.168.1.101:554/stream"
+    zone_id: building_entrance
+    location_desc: "Main building entrance, facing outward"
+    resolution_w: 1920
+    resolution_h: 1080
+    fps_target: 30
+    enabled: true
+
+  - camera_id: cam-02
+    display_name: "Server Room Camera"
+    stream_url: "rtsps://cam02:password@192.168.1.102:554/stream"
+    zone_id: server_room
+    location_desc: "Server room, wide-angle ceiling mount"
+    resolution_w: 1920
+    resolution_h: 1080
+    fps_target: 15
+    enabled: true
+
+# Additional cameras (disabled until hardware available)
+  - camera_id: cam-03
+    display_name: "Room A Camera"
+    stream_url: "rtsps://cam03:password@192.168.1.103:554/stream"
+    zone_id: room_a
+    location_desc: "Room A, corner mount"
+    resolution_w: 1920
+    resolution_h: 1080
+    fps_target: 25
+    enabled: false
+
+  - camera_id: cam-04
+    display_name: "Main Corridor Camera"
+    stream_url: "rtsps://cam04:password@192.168.1.104:554/stream"
+    zone_id: corridor_main
+    location_desc: "Main corridor, facing entrance"
+    resolution_w: 1920
+    resolution_h: 1080
+    fps_target: 30
+    enabled: false

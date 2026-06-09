@@ -1,0 +1,50 @@
+pipeline:
+  # Processing rate per camera
+  face_pipeline_fps: 10         # Run face pipeline at 10 FPS per camera
+  object_pipeline_fps: 10       # Object detection at 10 FPS per camera
+  action_pipeline_fps: 2        # Action recognition at 2 FPS per track (X3D-M)
+  scene_understanding_fps: 0.033  # Scene understanding at 1/30 FPS per camera
+
+  # Batch sizes for GPU efficiency
+  face_batch_size: 8
+  object_batch_size: 4
+  reid_batch_size: 16
+
+  # Frame buffer
+  frame_buffer_size: 32         # frames per camera before dropping
+
+  # GPU scheduling
+  gpu_device: ${DEVICE}
+  use_tensorrt: ${USE_TENSORRT}
+
+  # Anti-spoofing gate
+  require_liveness_for_recognition: true
+
+  # Enrollment
+  enrollment_auto_trigger: true
+  enrollment_restricted_zones_only: false  # Set true for high-security mode
+
+memory:
+  # Redis → PostgreSQL flush interval
+  redis_flush_interval_sec: 300
+
+  # Neo4j promotion (nightly batch job start time)
+  knowledge_graph_update_cron: "0 2 * * *"   # 2 AM daily
+
+  # Behavioral baseline minimum days before enabling deviation detection
+  baseline_min_days: 7
+
+event_engine:
+  # Anomaly detection
+  anomaly_baseline_days: 7
+  anomaly_zscore_threshold: 3.0
+  anomaly_min_events_for_baseline: 100
+
+  # Alert deduplication
+  alert_dedup_window_sec: 30
+
+alerts:
+  max_alerts_per_minute_per_camera: 10
+  webhook_timeout_sec: 10
+  email_enabled: false
+  webhook_enabled: false

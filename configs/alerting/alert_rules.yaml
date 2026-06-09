@@ -1,0 +1,103 @@
+rules:
+  - name: person_entered_restricted
+    description: "Unknown or any person entered a restricted zone"
+    trigger_conditions:
+      - "event_type == 'PERSON_ENTERED'"
+      - "zone_type == 'restricted'"
+    time_window_sec: 0
+    severity: HIGH
+    actions: [alert, snapshot, log]
+    cooldown_sec: 30
+
+  - name: unknown_person_restricted
+    description: "Unrecognized person in restricted area"
+    trigger_conditions:
+      - "event_type == 'UNKNOWN_PERSON_DETECTED'"
+      - "zone_type == 'restricted'"
+    time_window_sec: 0
+    severity: CRITICAL
+    actions: [alert, snapshot, log]
+    cooldown_sec: 60
+
+  - name: tailgating_door
+    description: "Two persons entered through access point within 3 seconds"
+    trigger_conditions:
+      - "persons_in_zone('building_entrance') > 1"
+      - "time_between_entries('building_entrance') < 3"
+    time_window_sec: 5
+    severity: HIGH
+    actions: [alert, snapshot, log]
+    cooldown_sec: 30
+
+  - name: loitering_restricted
+    description: "Person in restricted zone longer than 5 minutes without action"
+    trigger_conditions:
+      - "zone_type == 'restricted'"
+      - "person_dwell_time > 300"
+    time_window_sec: 300
+    severity: MEDIUM
+    actions: [alert, log]
+    cooldown_sec: 300
+
+  - name: rack_access
+    description: "Person within proximity of server rack"
+    trigger_conditions:
+      - "event_type == 'RACK_ACCESS'"
+    time_window_sec: 0
+    severity: MEDIUM
+    actions: [alert, snapshot, log]
+    cooldown_sec: 60
+
+  - name: camera_tamper
+    description: "Camera tampering detected"
+    trigger_conditions:
+      - "event_type == 'CAMERA_TAMPER_SUSPECTED'"
+    time_window_sec: 0
+    severity: CRITICAL
+    actions: [alert, log]
+    cooldown_sec: 0    # Never suppress tamper alerts
+
+  - name: fight_detected
+    description: "Fighting action recognized"
+    trigger_conditions:
+      - "event_type == 'FIGHT_DETECTED'"
+    time_window_sec: 0
+    severity: CRITICAL
+    actions: [alert, snapshot, log]
+    cooldown_sec: 30
+
+  - name: fall_detected
+    description: "Person fall detected"
+    trigger_conditions:
+      - "event_type == 'FALL_DETECTED'"
+    time_window_sec: 0
+    severity: HIGH
+    actions: [alert, snapshot, log]
+    cooldown_sec: 60
+
+  - name: animal_intrusion
+    description: "Animal detected in facility"
+    trigger_conditions:
+      - "event_type == 'ANIMAL_INTRUSION'"
+    time_window_sec: 0
+    severity: MEDIUM
+    actions: [alert, log]
+    cooldown_sec: 300
+
+  - name: unusual_activity
+    description: "Statistical anomaly: activity outside 3-sigma baseline"
+    trigger_conditions:
+      - "event_type == 'UNUSUAL_ACTIVITY'"
+      - "anomaly_score > 3.0"
+    time_window_sec: 0
+    severity: MEDIUM
+    actions: [alert, log]
+    cooldown_sec: 600
+
+maintenance_windows:
+  # During maintenance, suppress non-critical rules
+  # Format: cron-style, rules to suppress
+  - name: weekend_maintenance
+    schedule: "0 2 * * 6"   # Saturday 2 AM
+    duration_minutes: 120
+    suppress_severities: [LOW, MEDIUM]

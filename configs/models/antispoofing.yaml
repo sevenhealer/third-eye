@@ -1,0 +1,29 @@
+ensemble:
+  policy: hard_and          # ALL models must pass; any failure = reject
+
+  minifasnet_v2:
+    weight_file: "MiniFASNetV2.pth"
+    input_size: [128, 128]
+    confidence_threshold: 0.85
+    enabled: true
+
+  cdcn_plus:
+    weight_file: "CDCN_plus.pth"
+    input_size: [256, 256]
+    confidence_threshold: 0.80
+    enabled: true
+
+  temporal_consistency:
+    num_frames: 10            # look-back window
+    min_blink_rate: 0.1       # blinks/second minimum for live
+    motion_variance_min: 0.02 # minimum optical flow variance
+    enabled: true
+
+default_deny_threshold: 0.85  # below this confidence = default-deny regardless
+
+attack_types:
+  - PRINTED_PHOTO
+  - PHONE_SCREEN
+  - VIDEO_REPLAY
+  - THREE_D_MASK
+  - DEEPFAKE

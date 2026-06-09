@@ -1,0 +1,28 @@
+bytetrack:
+  track_thresh: 0.5         # detection confidence threshold for tracking
+  track_buffer: 90          # frames to keep lost track before deletion
+  match_thresh: 0.8         # IOU threshold for track-detection matching
+  min_box_area: 10
+
+strongsort:
+  max_dist: 0.2             # ReID embedding cosine distance threshold
+  max_iou_distance: 0.7
+  max_age: 70
+  n_init: 3
+  nn_budget: 100
+  mc_lambda: 0.995          # motion consistency lambda
+  ema_alpha: 0.9            # exponential moving average for track embedding
+
+osnet_reid:
+  weight_file: "osnet_x1_0_imagenet.pth"
+  input_size: [256, 128]
+  embedding_dim: 512
+  cosine_threshold: 0.65    # same-identity match threshold
+  fine_tuned: false         # set true after domain fine-tuning
+  fine_tuned_weight_file: "osnet_x1_0_thirdeye.pth"
+
+cross_camera:
+  enabled: true
+  max_time_gap_sec: 30      # max time between sightings to link tracks
+  spatial_constraint: true  # use camera adjacency graph to filter candidates
+  min_embedding_similarity: 0.65

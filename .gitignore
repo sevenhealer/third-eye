@@ -1,0 +1,79 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Models (large binary files — track with DVC instead)
+models/weights/*.pt
+models/weights/*.pth
+models/weights/*.onnx
+models/weights/*.bin
+models/tensorrt/*.engine
+models/tensorrt/*.trt
+models/custom/*.pt
+models/custom/*.pth
+!models/weights/.gitkeep
+!models/tensorrt/.gitkeep
+!models/custom/.gitkeep
+
+# Data (track with DVC)
+data/raw/
+data/processed/
+data/enrolled/
+data/feedback/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/enrolled/.gitkeep
+!data/feedback/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Archives (video segments)
+/tmp/third-eye-archive/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# DVC
+.dvc/tmp/
+.dvc/cache/
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Docker
+*.pid

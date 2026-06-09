@@ -1,0 +1,23 @@
+primary:
+  name: scrfd_10gf
+  weight_file: "scrfd_10g_bnkps.onnx"
+  input_size: [640, 640]
+  confidence_threshold: 0.5
+  nms_threshold: 0.4
+  use_tensorrt: ${USE_TENSORRT}
+
+cascade_prescreener:
+  name: scrfd_2_5gf
+  weight_file: "scrfd_2.5g_bnkps.onnx"
+  input_size: [640, 640]
+  confidence_threshold: 0.3
+
+quality_filter:
+  min_face_size_px: 40
+  max_occlusion_ratio: 0.5
+  min_laplacian_variance: 100    # blur threshold
+  min_quality_score: 0.5
+
+landmark:
+  num_points: 5
+  alignment_target_size: 112
