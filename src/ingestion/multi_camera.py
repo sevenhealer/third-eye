@@ -27,6 +27,7 @@ class CameraConfig:
     zone_id: str = ""
     max_fps: int = 15
     reconnect_max_seconds: int = 60
+    drop_stale: bool = False  # True for live cameras: process newest frame, drop backlog
 
 
 class MultiCameraManager:
@@ -81,6 +82,7 @@ class MultiCameraManager:
                 camera_id=cfg.camera_id,
                 zone_id=cfg.zone_id,
                 max_fps=cfg.max_fps,
+                drop_stale=cfg.drop_stale,
             )
             self._cameras[cfg.camera_id] = cam
             self._producers[cfg.camera_id] = producer

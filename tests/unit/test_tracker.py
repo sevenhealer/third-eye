@@ -126,6 +126,19 @@ def test_two_nearby_detections_get_different_ids():
     assert len(ids) == 2
 
 
+def test_coasting_track_not_emitted():
+    """A confirmed track that missed this frame must not report a stale bbox."""
+    tracker = fresh_tracker(min_hits=1, max_age=5, high_threshold=0.6)
+    det = _det(conf=0.9)
+    assert len(tracker.update([det])) == 1   # confirmed and matched
+    assert tracker.update([]) == []          # coasting: suppressed, not deleted
+    assert tracker.active_track_count == 1
+    # same id comes back once the detection reappears
+    result = tracker.update([det])
+    assert len(result) == 1
+    assert result[0].time_since_update == 0
+
+
 def test_track_deleted_after_max_age():
     tracker = fresh_tracker(min_hits=1, max_age=2, high_threshold=0.6)
     tracker.update([_det(conf=0.9)])   # hit 1 → confirmed (min_hits=1)

@@ -144,6 +144,11 @@ async def main() -> None:
     _check_weights(weights_dir)
     _set_minimal_env()
 
+    # must run before any ONNX session is created, or the CUDA provider
+    # fails to find libcublasLt/libcudnn and falls back to CPU
+    from src.core.gpu_manager import preload_cuda_libraries
+    preload_cuda_libraries()
+
     import cv2
     from insightface.app import FaceAnalysis
 
@@ -195,6 +200,7 @@ async def main() -> None:
         camera_id=args.camera_id,
         zone_id=args.zone_id,
         max_fps=args.fps,
+        drop_stale=True,  # live source: always process the newest frame
     )
 
     async def process_frame(frame, meta) -> None:

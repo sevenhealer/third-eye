@@ -172,6 +172,9 @@ class CameraReader:
             cap.set(_cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10_000)
         else:
             cap = _cv2.VideoCapture(source)
+            # keep the driver queue at one frame so reads stay near-live;
+            # ignored by backends that don't support it
+            cap.set(_cv2.CAP_PROP_BUFFERSIZE, 1)
         if not cap.isOpened():
             cap.release()
             logger.warning("camera_open_failed", source=str(source))

@@ -119,3 +119,53 @@ async def test_frame_count_tracked():
     producer = FrameProducer(camera=camera, camera_id="c0", max_fps=0)
     await producer.run(AsyncMock())
     assert producer._frame_count == 5
+
+
+# ── drop_stale mode ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_drop_stale_processes_newest_and_counts_drops():
+    """Grabber drains the camera; the final processed frame is the newest one."""
+    n = 50
+    frames = [np.full((4, 4, 3), i, dtype=np.uint8) for i in range(n)]
+    camera = make_camera(frames)
+    received: list[np.ndarray] = []
+
+    async def capture(frame, meta):
+        received.append(frame)
+
+    producer = FrameProducer(camera=camera, camera_id="c0", max_fps=0, drop_stale=True)
+    await producer.run(capture)
+
+    assert len(received) >= 1
+    # last frame delivered to the callback is the last one the camera produced
+    assert received[-1][0, 0, 0] == n - 1
+    # every frame is either processed or counted as dropped
+    assert producer._frame_count + producer._frames_dropped == n
+
+
+@pytest.mark.asyncio
+async def test_drop_stale_stops_when_camera_fails():
+    camera = make_camera(frames=[])   # immediately fails
+    callback = AsyncMock()
+
+    producer = FrameProducer(camera=camera, camera_id="c0", max_fps=0, drop_stale=True)
+    await producer.run(callback)
+
+    assert callback.call_count == 0
+    assert producer._running is False
+
+
+@pytest.mark.asyncio
+async def test_drop_stale_stop_halts_producer():
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    camera = MagicMock()
+    camera.read_frame.return_value = (True, frame)
+
+    producer = FrameProducer(camera=camera, camera_id="c0", max_fps=0, drop_stale=True)
+
+    async def stop_after_one(f, meta):
+        producer.stop()
+
+    await producer.run(stop_after_one)
+    assert producer._running is False
