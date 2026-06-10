@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 import numpy as np
+from sqlalchemy import text
 
 from src.core.database import get_db_session
 from src.core.exceptions import GalleryError
@@ -51,7 +52,7 @@ class FaceGallery:
             async with get_db_session() as session:
                 result = await session.execute(
                     _GALLERY_SEARCH_SQL,
-                    {"vec": query_vec.tolist(), "top_k": top_k},
+                    {"vec": _vec_literal(query_vec), "top_k": top_k},
                 )
                 rows = result.fetchall()
         except Exception as exc:
@@ -83,7 +84,6 @@ class FaceGallery:
         Raises GalleryError on failure.
         """
         embedding_id = str(uuid.uuid4())
-        vec = l2_normalize(embedding).tolist()
         try:
             async with get_db_session() as session:
                 await session.execute(
@@ -91,10 +91,10 @@ class FaceGallery:
                     {
                         "embedding_id": embedding_id,
                         "person_id": person_id,
-                        "vec": vec,
+                        "vec": _vec_literal(l2_normalize(embedding)),
                         "quality_score": quality_score,
                         "camera_id": camera_id,
-                        "captured_at": datetime.now(timezone.utc).isoformat(),
+                        "captured_at": datetime.now(timezone.utc),
                     },
                 )
                 await session.commit()
@@ -122,8 +122,14 @@ class FaceGallery:
             raise GalleryError(f"Gallery delete failed: {exc}") from exc
 
 
+def _vec_literal(vec: np.ndarray) -> str:
+    # asyncpg has no codec for the pgvector type, so the bind param must be the
+    # textual form '[v1,v2,...]' that pgvector parses on CAST.
+    return "[" + ",".join(f"{v:.8f}" for v in vec.tolist()) + "]"
+
+
 # Raw SQL kept here so the class stays readable and queries stay auditable
-_GALLERY_SEARCH_SQL = """
+_GALLERY_SEARCH_SQL = text("""
     SELECT
         embedding_id,
         person_id,
@@ -131,18 +137,18 @@ _GALLERY_SEARCH_SQL = """
     FROM face_gallery
     ORDER BY embedding <=> CAST(:vec AS vector)
     LIMIT :top_k
-"""
+""")
 
-_GALLERY_INSERT_SQL = """
+_GALLERY_INSERT_SQL = text("""
     INSERT INTO face_gallery
         (embedding_id, person_id, embedding, quality_score, source_camera_id, captured_at)
     VALUES
         (:embedding_id, :person_id, CAST(:vec AS vector), :quality_score, :camera_id, :captured_at)
-"""
+""")
 
-_GALLERY_DELETE_SQL = """
+_GALLERY_DELETE_SQL = text("""
     DELETE FROM face_gallery WHERE person_id = :person_id
-"""
+""")
 
 
 _gallery: FaceGallery | None = None

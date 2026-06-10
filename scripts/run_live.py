@@ -120,6 +120,10 @@ def _check_weights(weights_dir: Path) -> None:
 
 
 def _set_minimal_env() -> None:
+    # Settings reads .env itself; real env vars would shadow it, so only set
+    # dummy fallbacks when no .env exists (keeps imports working without one).
+    if (ROOT / ".env").exists():
+        return
     defaults = {
         "APP_SECRET_KEY": "devkeydevkeydevkeydevkeydevkeydev",
         "JWT_SECRET_KEY": "devjwtdevjwtdevjwtdevjwtdevjwtdevjwtdevjwtdevjwt",

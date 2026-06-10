@@ -36,6 +36,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def _set_minimal_env() -> None:
+    # Settings reads .env itself; real env vars would shadow it, so only set
+    # dummy fallbacks when no .env exists (keeps imports working without one).
+    if (ROOT / ".env").exists():
+        return
     defaults = {
         "APP_SECRET_KEY": "devkeydevkeydevkeydevkeydevkeydev",
         "JWT_SECRET_KEY": "devjwtdevjwtdevjwtdevjwtdevjwtdevjwtdevjwtdevjwt",
@@ -139,9 +143,23 @@ async def main() -> None:
     print(f"person_id = {person_id}")
     print("Saving to gallery ...")
 
+    from sqlalchemy import text
+
+    from src.core.database import get_db_session
     from src.face_recognition.gallery import FaceGallery
+
     gallery = FaceGallery()
     try:
+        # persons row must exist first — face_gallery.person_id is a FK to it
+        async with get_db_session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO persons (person_id, display_name, role) "
+                    "VALUES (:pid, :name, :role)"
+                ),
+                {"pid": person_id, "name": args.name, "role": args.role},
+            )
+            await session.commit()
         eid = await gallery.add_embedding(
             person_id=person_id,
             embedding=mean_emb,
@@ -149,12 +167,8 @@ async def main() -> None:
             camera_id=str(source),
         )
         print(f"\nEnrolled '{args.name}' successfully!")
+        print(f"  person_id    : {person_id}")
         print(f"  embedding_id : {eid}")
-        print(f"\nRegister the display name (run in psql):")
-        print(
-            f"  INSERT INTO persons (person_id, display_name, role, enrolled_at)\n"
-            f"  VALUES ('{person_id}', '{args.name}', '{args.role}', now());"
-        )
     except Exception as exc:
         print(f"\nERROR saving to gallery: {exc}")
         print("Is PostgreSQL running?  docker compose up -d postgres")
