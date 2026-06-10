@@ -4,10 +4,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import UUID
 
+import bcrypt
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,6 @@ from src.core.logging import get_logger
 logger = get_logger(__name__)
 settings = get_settings()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 ROLE_HIERARCHY = ["readonly", "operator", "analyst", "admin", "security_officer"]
@@ -46,11 +45,17 @@ class CurrentUser(BaseModel):
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    # bcrypt only reads the first 72 bytes; truncate explicitly because
+    # bcrypt>=4.1 raises on longer input (passlib used to truncate silently)
+    return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(plain.encode()[:72], hashed.encode())
+    except ValueError:
+        # malformed stored hash must fail closed, not 500
+        return False
 
 
 def create_access_token(data: dict) -> str:
@@ -93,7 +98,7 @@ async def get_current_user(
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exc
-    except JWTError:
+    except jwt.InvalidTokenError:
         raise credentials_exc
 
     result = await db.execute(

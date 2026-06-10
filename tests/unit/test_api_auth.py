@@ -5,8 +5,8 @@ import os
 import time
 import uuid
 
+import jwt
 import pytest
-from jose import jwt
 
 os.environ.setdefault("APP_SECRET_KEY", "testsecrettestsecrettestsecrettestse")
 os.environ.setdefault("JWT_SECRET_KEY", "testjwttestjwttestjwttestjwttestjwttest")
