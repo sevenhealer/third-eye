@@ -1,3 +1,36 @@
+# Sprint 1 — Cross-Platform Notes (Mac ↔ Linux)
+
+Sprint 1 is fully cross-platform:
+
+- All 7 Docker infra services use official images that run on Linux and Mac (amd64 + arm64)
+- FastAPI, uvicorn, all Python deps — pure cross-platform
+- PostgreSQL schema, Kafka topics, Redis — identical on both
+
+Three minor differences to be aware of:
+
+1. **MLflow on port 5001** — changed from 5000 → 5001 because macOS AirPlay hijacks
+   port 5000. The fix lives in `docker-compose.yml`, so it uses 5001 on Linux too.
+   Harmless.
+2. **`docker-compose` vs `docker compose`** — this guide uses `docker-compose`
+   (standalone v2 binary). On Linux with newer Docker Engine the Compose plugin is
+   invoked as `docker compose`; swap the command if needed.
+3. **`DEVICE=cpu` in `.env`** — set for Mac. On Linux with the RTX 3090 it should be
+   `DEVICE=cuda:0`. Doesn't matter for Sprint 1 (no ML inference runs), but must change
+   from Sprint 2 onward.
+
+| Thing | Mac | Linux |
+|---|---|---|
+| Docker infra | ✅ | ✅ |
+| FastAPI + auth | ✅ | ✅ |
+| Audit log | ✅ | ✅ |
+| MLflow port | 5001 (AirPlay workaround) | 5001 (harmless) |
+| docker command | `docker-compose` | `docker compose` or `docker-compose` |
+| DEVICE | `cpu` | `cuda:0` (Sprint 2+) |
+
+Sprint 1 is effectively OS-independent; the Linux differences only matter from Sprint 2 onward.
+
+---
+
 # Sprint 1 — Live Test Guide
 
 Run all commands from the repo root: `/Users/iamrohanchatterjee/Documents/Code/third-eye`

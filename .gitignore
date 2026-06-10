@@ -20,6 +20,8 @@ build/
 .venv/
 
 # Models (large binary files — track with DVC instead)
+models/weights/models/
+models/weights/*.zip
 models/weights/*.pt
 models/weights/*.pth
 models/weights/*.onnx
