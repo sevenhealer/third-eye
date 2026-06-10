@@ -3,7 +3,7 @@
 **Date:** 2026-06-09
 **Owner:** Rohan Chatterjee
 **Methodology:** Scrum (2-week sprints)
-**Hardware baseline:** RTX 3090 · Linux · NVMe · Python 3.11+
+**Hardware baseline:** RTX 3090 24 GB (dev/test) → NVIDIA H100 80 GB (production) · Linux · NVMe · Python 3.11+
 
 ---
 
@@ -24,7 +24,7 @@
 | ID | Requirement |
 |----|-------------|
 | SR-01 | System ingests video from ≥ 8 IP/USB cameras simultaneously |
-| SR-02 | All ML inference runs locally on RTX 3090 (no cloud API calls) |
+| SR-02 | All ML inference runs locally on GPU — RTX 3090 (dev/test), H100 (production); no cloud API calls |
 | SR-03 | System answers natural-language queries about current and historical state |
 | SR-04 | All biometric data encrypted at rest (AES-256) |
 | SR-05 | Audit log is append-only, hash-chained, and tamper-evident |
@@ -89,7 +89,7 @@
 
 | ID | Risk | Probability | Impact | Mitigation | Owner |
 |----|------|-------------|--------|------------|-------|
-| R-01 | VRAM exhaustion under peak load | MEDIUM | HIGH | GPU manager with strict VRAM budget; time-multiplexing LLaVA/Mistral | ML Engineer |
+| R-01 | VRAM exhaustion under peak load | MEDIUM | HIGH | GPU manager with strict VRAM budget; time-multiplexing the VLM with vision models; quantized VLM on 3090 | ML Engineer |
 | R-02 | Anti-spoofing bypass by novel attack | MEDIUM | CRITICAL | Ensemble hard-AND; default-deny on uncertainty; quarterly red-team | Security Officer |
 | R-03 | Face recognition false accept | LOW | CRITICAL | Strict 0.45 cosine threshold; dual-camera confirmation for high-security zones | ML Engineer |
 | R-04 | Kafka consumer lag under burst | MEDIUM | HIGH | Per-topic consumer groups; backpressure signals; non-critical topic drop policy | DevOps |
@@ -99,7 +99,8 @@
 | R-08 | Insider threat via unauthorized enrollment | LOW | CRITICAL | Dual authorization; daily enrollment audit report; anomaly detection on enrollment patterns | Security Officer |
 | R-09 | Database corruption / data loss | LOW | CRITICAL | WAL replication; daily pg_dump to encrypted NVMe; TimescaleDB continuous backup | DevOps |
 | R-10 | Prompt injection via LLM queries | MEDIUM | HIGH | Template-based queries only; LLM receives structured JSON not raw text; process isolation | Security Officer |
-| R-11 | Cross-camera ReID failure | MEDIUM | MEDIUM | OSNet fine-tuning on deployment cameras; spatial-temporal constraints | ML Engineer |
+| R-11 | Cross-camera ReID failure | MEDIUM | MEDIUM | ReID fine-tuning on deployment cameras (OSNet → SOLIDER/CLIP-ReID per §15); spatial-temporal constraints | ML Engineer |
+| R-13 | Mixed embedding spaces in gallery after model upgrade | MEDIUM | CRITICAL | Enforce `model_version` in gallery search; full re-enrollment on recognition model change (E11-S03) | ML Engineer |
 | R-12 | Key person unavailable mid-project | LOW | HIGH | Document all architecture decisions; modular design allows parallel development | PM |
 
 ---
@@ -118,6 +119,7 @@
 | E-08 | MLOps & Continuous Learning | DVC, MLflow, Retraining |
 | E-09 | Security & Compliance | Audit log, Encryption, RBAC, Adversarial testing |
 | E-10 | Observability & Operations | Prometheus, Grafana, Runbooks |
+| E-11 | Model & Architecture Upgrades (2026-06) | All inference layers, serving, evaluation — see §15 |
 
 ---
 
@@ -171,8 +173,8 @@
 | E04-S03 | As a security officer, loitering (person in zone > N seconds) triggers an alert via the action recognition pipeline | 5 | P1 | 2 |
 | E04-S04 | As an operator, the system detects a cat entering a restricted zone and sends an animal intrusion alert | 3 | P2 | 2 |
 | E04-S05 | As an analyst, CLIP ViT-L/14 classifies the scene type (office, server room, corridor) for each camera every second | 3 | P1 | 2 |
-| E04-S06 | As an analyst, LLaVA-1.5-7B generates a natural-language description of each camera scene every 30 seconds | 5 | P1 | 2 |
-| E04-S07 | As a security officer, LLaVA scene captioning is isolated from prompt injection (structured JSON context only, no raw text) | 5 | P0 | 2 |
+| E04-S06 | As an analyst, the VLM (Qwen3.5-9B dev / Qwen3.5-27B prod, supersedes LLaVA-1.5) generates a natural-language description of each camera scene every 30 seconds | 5 | P1 | 2 |
+| E04-S07 | As a security officer, VLM scene captioning is isolated from prompt injection (structured JSON context only, no raw text) | 5 | P0 | 2 |
 
 ### Epic E-05: Event & Alert Engine
 
@@ -371,11 +373,13 @@ E10-S01 (Prometheus scraping)  must complete before E10-S02, E10-S04
 - E01-S03: Scale to 8 simultaneous cameras
 - E03-S07: Object removal / addition events
 
-**Sprint 7 (Weeks 13–14): Knowledge Graph + Memory**
+**Sprint 7 (Weeks 13–14): Knowledge Graph + Memory + Pipeline Restructure**
 - E06-S02: TimescaleDB zone presence history
 - E06-S03: Neo4j deployment + schema + Cypher query interface
 - E06-S04: Memory consolidation pipeline (Redis → PG → Neo4j)
 - E06-S07: Named entity configuration (Server Rack 1 → AI Cluster, etc.)
+- E11-S01: Frames off Kafka — decode + inference co-located on GPU node; only metadata/events/crops on Kafka (see §15, prerequisite for H100 scale)
+- E11-S02: Evaluation harness v1 — labeled clip set from deployment cameras; per-model metrics (mAP, TAR@FAR, ACER, IDF1) logged to MLflow on every model change
 
 **Sprint 8 (Weeks 15–16): Behavioral Intelligence**
 - E04-S01: X3D-M always-on action detection
@@ -395,8 +399,8 @@ E10-S01 (Prometheus scraping)  must complete before E10-S02, E10-S04
 
 **Sprint 10 (Weeks 19–20): Scene Understanding + Security Hardening**
 - E04-S05: CLIP scene classification
-- E04-S06: LLaVA-1.5-7B scene captioning
-- E04-S07: LLaVA prompt injection isolation
+- E04-S06: Qwen3.5 scene captioning (9B quantized on 3090; 27B on H100) — replaces LLaVA-1.5-7B and Mistral-7B for NLQ
+- E04-S07: VLM prompt injection isolation
 - E09-S01: Audit log hash chain verification
 - E09-S02: Face embedding AES-256 encryption
 - E09-S08: Soft-delete for identities
@@ -417,13 +421,16 @@ E10-S01 (Prometheus scraping)  must complete before E10-S02, E10-S04
 
 ### Phase 3 — Enterprise (Sprints 11–16, Weeks 21–32)
 
-**Sprint 11–12 (Weeks 21–24): MLOps Pipeline**
+**Sprint 11–12 (Weeks 21–24): MLOps Pipeline + Model Upgrades**
 - E08-S01: DVC dataset versioning
 - E08-S02: MLflow experiment tracking
 - E08-S03: Dual-approval model promotion
 - E08-S04: Drift detector (KL divergence hourly)
 - E08-S05: Operator feedback → training loop
 - E08-S06: Shadow mode deployment (24h blue-green)
+- E11-S03: Face recognition upgrade — ArcFace R50 (buffalo_l) → AdaFace IR-101 (WebFace12M); full gallery re-enrollment; `model_version` enforced in gallery search (benchmark TopoFR R100 as alternative via E11-S02 harness)
+- E11-S04: Object detection upgrade — YOLOv9-C → RF-DETR-M or D-FINE-L, gated on E11-S02 eval; add YOLO-World (open-vocabulary) for NLQ-driven detection of untrained classes
+- E11-S05: ReID upgrade — OSNet → SOLIDER-ReID or CLIP-ReID, fine-tuned on deployment cameras
 - **Milestone M-06: MLOps Live**
 
 **Sprint 13–14 (Weeks 25–28): Security Hardening + Forensics**
@@ -435,6 +442,8 @@ E10-S01 (Prometheus scraping)  must complete before E10-S02, E10-S04
 - E01-S05: Archive HMAC verification
 - E07-S09: "What changed since yesterday?" query
 - E06-S06: Data retention auto-delete policy
+- E11-S06: Anti-spoofing upgrade — add CLIP/language-guided FAS member (FLIP-style) to the ensemble; benchmark on OULU-NPU + SiW-M
+- E11-S07: Multimodal liveness hardware — IR/depth camera (e.g. RealSense) at enrollment station and high-security choke points; depth signal feeds ensemble hard-AND
 - **Milestone M-07: Forensic Search**
 
 **Sprint 15–16 (Weeks 29–32): Performance + Operations**
@@ -444,6 +453,8 @@ E10-S01 (Prometheus scraping)  must complete before E10-S02, E10-S04
 - E10-S04: Security Grafana dashboard
 - E10-S05: PostgreSQL WAL disaster recovery test
 - E10-S06: Operations runbook
+- E11-S08: Inference serving — all vision models behind Triton Inference Server with TensorRT FP16 engines (3090) / FP8 (H100); per-model latency SLOs in Prometheus
+- E11-S09: H100 production deployment profile — vLLM for Qwen3.5-27B, camera count and VRAM budget re-baselined for 80 GB
 - Load test: 8 cameras + 10 concurrent NL queries
 - **Milestone M-08: Production Release**
 
@@ -532,3 +543,64 @@ Single-person teams: wear all hats; use the Phase ordering to stay on the critic
 | Camera uptime | ≥ 99.5% | Prometheus |
 | Audit log hash chain validity | 100% | Startup + hourly check |
 | Model drift KL divergence | < 0.1 | Drift detector hourly |
+| Object detection mAP50:95 (deployment eval set) | tracked per release | MLflow via E11-S02 harness |
+
+---
+
+## 15. Model & Architecture Upgrade Roadmap (Epic E11, added 2026-06-10)
+
+Researched against the June 2026 state of the art. **Rule: no model swap ships without
+a before/after run on the E11-S02 evaluation harness** — upgrades are measured, not vibes.
+
+### Hardware strategy
+
+| Environment | GPU | Role |
+|---|---|---|
+| Dev/test | RTX 3090 24 GB | Full pipeline at reduced scale; quantized VLM (Qwen3.5-9B 4-bit); TensorRT FP16 |
+| Production | H100 80 GB | 8+ cameras full pipeline; Qwen3.5-27B via vLLM (FP8); TensorRT FP8 engines; headroom for shadow-mode A/B |
+
+Everything must run on both — the 3090 profile is the H100 profile with smaller
+VLM weights and lower camera count, not a different architecture.
+
+### Model upgrade matrix
+
+| Component | Current (shipped) | Target | Why |
+|---|---|---|---|
+| Face detection | SCRFD-10GF | **Keep** | Still best accuracy-per-FLOP for faces; not a bottleneck |
+| Face recognition | ArcFace R50 (buffalo_l `w600k_r50`) — *plan said AdaFace R100; code never got it* | **AdaFace IR-101 (WebFace12M)**; benchmark TopoFR R100 | AdaFace's quality-adaptive margin is the strongest published approach for low-quality surveillance imagery (IJB-C hard sets); TopoFR leads clean benchmarks |
+| Anti-spoofing | MiniFASNet-V2 + CDCN++ (RGB-only) | Keep ensemble; **add FLIP-style CLIP-guided FAS member + IR/depth at choke points** | RGB-only PAD has a hard ceiling; multimodal (RGB+depth/IR) reports 40–60% better spoof detection — this is a sensor problem more than a model problem |
+| Object detection | YOLOv9-C | **RF-DETR-M or D-FINE-L** (+ **YOLO-World** for open-vocab) | Real-time DETRs now Pareto-dominate YOLO (RF-DETR-M: 54.7 mAP @ 4.5 ms on T4); NMS-free = simpler TensorRT graph; open-vocab lets NLQ find untrained classes |
+| Tracking | ByteTrack / StrongSORT | **Keep**; re-evaluate BoT-SORT on harness | Tracker choice is not the current accuracy bottleneck; ReID features are |
+| ReID | OSNet (2019) | **SOLIDER-ReID or CLIP-ReID**, fine-tuned on deployment cameras | Transformer/self-supervised human-centric pretraining substantially outperforms OSNet cross-camera |
+| LLM (NLQ) | Mistral-7B-instruct-v0.3 | **Qwen3.5-9B (3090) / Qwen3.5-27B (H100)** | Qwen3.5 (Feb 2026, Apache-2.0) is natively multimodal — one model replaces both Mistral and LLaVA; 27B matches GPT-5-mini-class on reasoning; 262K context for long timelines |
+| VLM (scenes) | LLaVA-1.5-7B | **Same Qwen3.5 instance** | Early-fusion multimodal: scene captioning and NLQ share one deployment (vLLM); halves VRAM vs two models. Note: there is no separate "Qwen3.5-VL" — Qwen3.5 *is* the VL model; track Qwen3.6 (27B dense / 35B-A3B) for the next eval cycle |
+| Serving | Per-process ONNX Runtime | **Triton Inference Server + TensorRT** | Concurrent model execution, dynamic batching across 8 cameras, per-model metrics; standard path to multi-GPU/multi-node (§ Sprint 23–24) |
+
+### Architectural commitments
+
+1. **Frames never travel through Kafka in production** (E11-S01, Sprint 7). Decode and
+   inference stay co-located on the GPU node; Kafka carries metadata, events, and face
+   crops only. `camera.frames` becomes dev-only. This is the single change that makes
+   the H100 (and later multi-node) scale-out work.
+2. **One embedding space per gallery** (E11-S03, R-13). `face_gallery.model_version`
+   becomes a hard filter in search SQL; switching recognition models requires
+   re-enrollment of all identities. Never mix R50 and IR-101 embeddings.
+3. **Eval harness before upgrades** (E11-S02, Sprint 7). Labeled clips from the real
+   deployment cameras; every candidate model gets TAR@FAR / ACER / mAP / IDF1 logged to
+   MLflow. The data flywheel (E08-S05 feedback loop + this harness) is the long-term
+   moat — model picks above are a snapshot, the harness is what keeps the system
+   state-of-the-art as releases continue.
+
+### E11 story index
+
+| Story | Sprint | Summary |
+|---|---|---|
+| E11-S01 | 7 | Frames off Kafka; metadata-only topics |
+| E11-S02 | 7 | Evaluation harness v1 (deployment clip set + MLflow) |
+| E11-S03 | 11–12 | AdaFace IR-101 migration + gallery re-enrollment + `model_version` enforcement |
+| E11-S04 | 11–12 | RF-DETR/D-FINE swap + YOLO-World open-vocab |
+| E11-S05 | 11–12 | SOLIDER/CLIP-ReID replacing OSNet |
+| E11-S06 | 13–14 | CLIP-guided FAS ensemble member |
+| E11-S07 | 13–14 | IR/depth liveness hardware at choke points |
+| E11-S08 | 15–16 | Triton + TensorRT serving for all vision models |
+| E11-S09 | 15–16 | H100 production profile (vLLM Qwen3.5-27B, re-baselined budgets) |
