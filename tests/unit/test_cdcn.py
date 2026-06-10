@@ -93,7 +93,8 @@ class TestCDCNPlusPlus:
         assert 0.0 <= out.item() <= 1.0
 
     def test_predict_alias(self):
-        model = self._model()
+        # eval mode: dropout makes train-mode forward passes stochastic
+        model = self._model().eval()
         x = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE)
         assert torch.equal(model(x), model.predict(x))
 
