@@ -49,6 +49,52 @@ CONTINUOUS_MODELS = {
 SHARED_LLM_SLOT = {"llava_7b_4bit", "mistral_7b_4bit"}
 
 
+def preload_cuda_libraries() -> None:
+    """
+    Make the CUDA runtime libraries bundled with the torch wheels
+    (nvidia-* pip packages) resolvable for ONNX Runtime's CUDA provider.
+
+    onnxruntime-gpu dlopens libcublasLt/libcudnn at session creation but
+    only searches the system loader path; the copies the torch wheels put
+    under site-packages/nvidia/*/lib are invisible to it, so the provider
+    fails with "libcublasLt.so.12: cannot open shared object file" and
+    inference silently falls back to CPU. Loading those libraries into the
+    process with RTLD_GLOBAL first lets the provider resolve them.
+
+    No-op on non-Linux platforms or when the nvidia wheels are absent.
+    """
+    import sys
+
+    if sys.platform != "linux":
+        return
+
+    import ctypes
+    import sysconfig
+    from pathlib import Path
+
+    nvidia_root = Path(sysconfig.get_paths()["purelib"]) / "nvidia"
+    if not nvidia_root.is_dir():
+        return
+
+    loaded = 0
+    pending = sorted(nvidia_root.glob("*/lib/lib*.so*"))
+    # two passes: inter-library deps (e.g. cudnn -> cublas) can need a retry
+    for _ in range(2):
+        failed = []
+        for lib in pending:
+            try:
+                ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+                loaded += 1
+            except OSError:
+                failed.append(lib)
+        pending = failed
+        if not pending:
+            break
+    logger.info(
+        "cuda_libraries_preloaded", loaded=loaded, unresolved=len(pending)
+    )
+
+
 class ModelState(str, Enum):
     UNLOADED = "unloaded"
     LOADING = "loading"

@@ -83,3 +83,9 @@ def test_context_manager_loads_and_releases(manager):
         assert manager._entries["videomae_b"].state == ModelState.LOADED
     # on-demand → should be unloaded after context exit
     assert manager._entries["videomae_b"].state == ModelState.UNLOADED
+
+
+def test_preload_cuda_libraries_is_safe_everywhere():
+    """No-op on macOS / missing nvidia wheels; must never raise."""
+    from src.core.gpu_manager import preload_cuda_libraries
+    preload_cuda_libraries()
