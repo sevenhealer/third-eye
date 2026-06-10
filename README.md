@@ -8,26 +8,52 @@ Third-Eye ingests multi-camera video, identifies people and objects in real time
 
 ---
 
+## Project Status
+
+**Implemented (Sprints 1–6):** infrastructure + API + hash-chained audit log, the full
+face pipeline (detection, anti-spoofing, recognition, enrollment), camera ingestion
+(USB + RTSP via PyAV, up to 8 cameras), object detection, multi-object tracking,
+cross-camera ReID, zone object events, model registry with SHA-256 signing, and the
+anti-spoofing fine-tune pipeline.
+
+**Live validation is in progress sprint-by-sprint** against real infrastructure:
+
+- Sprint 1 (infra, API, audit log) — ✅ passed ([guide](scripts/sprint1_live_tests.md))
+- Sprint 2 (face pipeline) — 🔄 testing now ([guide](scripts/sprint2_live_tests.md))
+
+Development runs on macOS (CPU/CoreML on Apple Silicon, `DEVICE=cpu`, MLflow on
+port 5001 due to AirPlay) and Linux + RTX 3090 (`DEVICE=cuda:0`). Production
+targets an NVIDIA H100.
+
+---
+
 ## Key Capabilities
 
 | Capability | Status |
 |---|---|
-| Real-time multi-camera ingestion (up to 8 × 1080p30) | 🏗️ Sprint 1 scaffolding |
-| Face detection (SCRFD-10GF, TensorRT FP16) | 🏗️ Sprint 2 |
-| Anti-spoofing — print / screen / deepfake / 3D mask | 🏗️ Sprint 2 |
-| Face recognition + identity enrollment (AdaFace R100) | 🏗️ Sprint 2 |
-| Object detection + counting (YOLOv9-C) | 🏗️ Sprint 2 |
-| Multi-object tracking + cross-camera ReID (ByteTrack + OSNet) | 🏗️ Sprint 3 |
-| Human action recognition (X3D-M + VideoMAE-B) | 🏗️ Sprint 4 |
-| Animal detection + species classification | 🏗️ Sprint 4 |
-| Scene understanding (CLIP + LLaVA-1.5-7B) | 🏗️ Sprint 5 |
-| Event detection — rule engine + anomaly detection | 🏗️ Sprint 3 |
-| Temporal reasoning + behavioral baselines | 🏗️ Phase 4 |
-| Knowledge graph (Neo4j) | 🏗️ Sprint 4 |
-| Natural-language queries (Mistral-7B local) | 🏗️ Sprint 5 |
+| Real-time multi-camera ingestion (up to 8 × 1080p30, PyAV RTSP) | ✅ Implemented |
+| Face detection (SCRFD-10GF) | ✅ Implemented |
+| Anti-spoofing ensemble — MiniFASNet-V2 + CDCN++ + temporal consistency | ✅ Implemented |
+| Face recognition + identity enrollment (ArcFace R50 → AdaFace IR-101 planned) | ✅ Implemented |
+| Object detection + zone events (YOLOv9-C → RF-DETR/D-FINE planned) | ✅ Implemented |
+| Multi-object tracking + cross-camera ReID (ByteTrack/StrongSORT + OSNet → SOLIDER planned) | ✅ Implemented |
+| Model registry (SHA-256) + anti-spoofing fine-tune pipeline | ✅ Implemented |
+| Knowledge graph (Neo4j) + memory consolidation | 🏗️ Sprint 7 |
+| Human action recognition (X3D-M + VideoMAE-B) | 🏗️ Sprint 8 |
+| Event detection — rule engine + anomaly detection | 🏗️ Sprint 8 |
+| Natural-language queries (Qwen3.5, local) | 🏗️ Sprints 9–10 |
+| Scene understanding (CLIP + Qwen3.5) | 🏗️ Sprint 10 |
 | Forensic search + video replay | 🏗️ Phase 3 |
-| Real-time alerts — webhook / email / push | 🏗️ Sprint 3 |
 | Continuous learning via operator feedback | 🏗️ Phase 3 |
+| Temporal reasoning + behavioral baselines | 🏗️ Phase 4 |
+| Animal detection + species classification | 🏗️ Phase 4 |
+
+Model choices are tracked against the June 2026 state of the art in
+[AGILE_PLAN.md §15](AGILE_PLAN.md) (Epic E11): AdaFace IR-101 recognition,
+RF-DETR/D-FINE + YOLO-World detection, SOLIDER/CLIP-ReID, CLIP-guided
+anti-spoofing with IR/depth hardware, Qwen3.5 replacing Mistral-7B + LLaVA-1.5,
+and Triton + TensorRT serving. No model ships without a before/after run on the
+deployment evaluation harness.
 
 ---
 
@@ -62,7 +88,7 @@ Third-Eye ingests multi-camera video, identifies people and objects in real time
   │  Layer 4      │  │  MOT + ReID   │  │  Layer 10     │
   │  Face Recog.  │  │  ByteTrack +  │  │  Scene Under. │
   │  AdaFace R100 │  │  StrongSORT + │  │  CLIP +       │
-  │  pgvector     │  │  OSNet        │  │  LLaVA-7B     │
+  │  pgvector     │  │  OSNet        │  │  Qwen3.5      │
   └───────┬───────┘  └───────┬───────┘  └───────┬───────┘
           └──────────────────┼──────────────────┘
                              │  Kafka: events.*
@@ -85,8 +111,8 @@ Third-Eye ingests multi-camera video, identifies people and objects in real time
                     └───────────────┘
                              │
                     ┌────────▼────────┐
-                    │  Layer 14       │  Mistral-7B-Instruct
-                    │  NL Query       │  via Ollama (local)
+                    │  Layer 14       │  Qwen3.5 (local —
+                    │  NL Query       │  vLLM / Ollama)
                     │  Engine         │  Template SQL/Cypher
                     └────────┬────────┘
                              │
@@ -105,20 +131,27 @@ Third-Eye ingests multi-camera video, identifies people and objects in real time
 
 ## Hardware Requirements
 
-| Component | Minimum | Recommended |
+| Component | Dev/Test | Production |
 |---|---|---|
-| GPU | RTX 3080 (10 GB) | RTX 3090 (24 GB) |
-| RAM | 32 GB | 64 GB |
+| GPU | RTX 3090 (24 GB) — macOS CPU/CoreML also supported for development | NVIDIA H100 (80 GB) |
+| RAM | 32 GB | 64 GB+ |
 | Storage | 500 GB NVMe | 2 TB NVMe |
-| OS | Linux (Ubuntu 22.04+) | Ubuntu 22.04 LTS |
+| OS | Linux (Ubuntu 22.04+) or macOS (dev only) | Ubuntu 22.04 LTS |
 | CUDA | 12.1+ | 12.3+ |
 | Docker | 24+ | 26+ |
 
-**VRAM budget on RTX 3090 at peak load: ~11.5 GB continuous + 4 GB time-multiplexed = ~15.5 GB total. Well within 24 GB.**
+**VRAM budget on RTX 3090 at peak load: ~11.5 GB continuous + 4 GB time-multiplexed = ~15.5 GB total. Well within 24 GB.** The dev profile is the production profile at smaller scale — same architecture, smaller VLM weights (Qwen3.5-9B quantized vs 27B) and fewer cameras.
 
 ---
 
 ## Quick Start
+
+> **Developing right now?** The sprint-by-sprint live test guides are the fastest
+> path: [`scripts/sprint1_live_tests.md`](scripts/sprint1_live_tests.md) (infra + API)
+> and [`scripts/sprint2_live_tests.md`](scripts/sprint2_live_tests.md) (face pipeline).
+> Key CLI tools: `scripts/download_models.py` (one-time, ~200 MB),
+> `scripts/run_live.py --source 0 --show` (live webcam feed),
+> `scripts/enroll.py --name "..."` (gallery enrollment).
 
 ### 1. Prerequisites
 
@@ -183,7 +216,7 @@ make audit-verify
 |---|---|---|
 | API docs | http://localhost:8000/docs | — |
 | Grafana | http://localhost:3000 | admin / see `GRAFANA_PASSWORD` in `.env` |
-| MLflow | http://localhost:5000 | — |
+| MLflow | http://localhost:5001 | — |
 | Neo4j Browser | http://localhost:7474 | neo4j / see `NEO4J_PASSWORD` |
 | Prometheus | http://localhost:9090 | — |
 
@@ -249,11 +282,11 @@ third-eye/
 │   ├── tracking/               # Layer 7: ByteTrack + StrongSORT + OSNet ReID
 │   ├── action_recognition/     # Layer 8: X3D-M + VideoMAE-B
 │   ├── animal_detection/       # Layer 9: YOLOv9-C + EfficientNet-B3
-│   ├── scene_understanding/    # Layer 10: CLIP + LLaVA-1.5-7B
+│   ├── scene_understanding/    # Layer 10: CLIP + Qwen3.5
 │   ├── event_detection/        # Layer 11: Rule engine + anomaly detector
 │   ├── temporal_reasoning/     # Layer 12: Timelines + pattern miner
 │   ├── memory/                 # Layer 13: Redis + PostgreSQL + Neo4j + pgvector
-│   ├── nlq/                    # Layer 14: NL query engine (Mistral-7B)
+│   ├── nlq/                    # Layer 14: NL query engine (Qwen3.5)
 │   ├── alerts/                 # Alert manager + notification routing
 │   ├── forensics/              # Forensic search + video replay
 │   ├── api/                    # FastAPI REST API + WebSocket
@@ -343,7 +376,7 @@ GET  /api/v1/admin/system-health     GPU + service health
 | X3D-M action (coarse) | 400 MB | Continuous |
 | CLIP ViT-L/14 scene | 900 MB | Continuous |
 | VideoMAE-B action (detail) | 1.2 GB | On-demand |
-| LLaVA-7B-4bit / Mistral-7B-4bit | 4.0 GB | Time-multiplexed (shared slot) |
+| Qwen3.5-9B-4bit (NLQ + scene captioning, one model) | 4.0 GB | Time-multiplexed (shared slot) |
 | Frame buffers + CUDA workspace | 3.0 GB | Continuous |
 | **Peak total** | **~15.5 GB** | |
 | **Headroom** | **~8.5 GB** | |
@@ -372,7 +405,12 @@ GET  /api/v1/admin/system-health     GPU + service health
 | **Phase 3 — Enterprise** | 21–32 | MLOps pipeline, forensic search, adversarial hardening, TensorRT |
 | **Phase 4 — Advanced** | 33–48 | Behavioral baselines, predictive analytics, multi-node prep |
 
-See [AGILE_PLAN.md](AGILE_PLAN.md) for the complete backlog (80 user stories), sprint plan, acceptance criteria, and risk register.
+Epic E11 (model & architecture upgrades, June 2026) runs across Sprints 7–16:
+frames-off-Kafka pipeline restructure and evaluation harness first, then measured
+model swaps, multimodal liveness hardware, and Triton + TensorRT serving for the
+H100 production profile.
+
+See [AGILE_PLAN.md](AGILE_PLAN.md) for the complete backlog (89 user stories), sprint plan, acceptance criteria, risk register, and the §15 upgrade roadmap.
 
 ---
 
@@ -452,6 +490,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 - [InsightFace](https://github.com/deepinsight/insightface) — SCRFD, ArcFace
 - [Ultralytics](https://github.com/ultralytics/ultralytics) — YOLOv9
+- [Qwen](https://github.com/QwenLM) — Qwen3.5 multimodal LLM
 - [Ollama](https://github.com/ollama/ollama) — Local LLM serving
 - [pgvector](https://github.com/pgvector/pgvector) — Vector similarity in PostgreSQL
 - [TimescaleDB](https://github.com/timescale/timescaledb) — Time-series on PostgreSQL
