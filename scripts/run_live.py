@@ -45,8 +45,14 @@ def parse_args() -> argparse.Namespace:
                    help="Camera index (0, 1, ...) or RTSP URL")
     p.add_argument("--camera-id", default="cam0")
     p.add_argument("--zone-id", default="entrance")
-    p.add_argument("--fps", type=int, default=10,
-                   help="Target processing FPS (default 10)")
+    p.add_argument("--fps", type=int, default=15,
+                   help="Target processing FPS (default 15; 0 = uncapped). "
+                        "Match the camera rate — fewer skipped frames means "
+                        "less motion between frames and steadier track IDs.")
+    p.add_argument("--det-size", type=int, default=0,
+                   help="Face detector input size (default: 960 on GPU, 640 "
+                        "on CPU). Larger finds small/distant faces on "
+                        "high-res streams at some speed cost.")
     p.add_argument("--show", action="store_true",
                    help="Open a cv2 window (requires opencv-python, not headless)")
     p.add_argument("--cpu", action="store_true",
@@ -162,9 +168,11 @@ async def main() -> None:
     except ValueError:
         source = args.source
 
+    det_size = args.det_size or (960 if ctx_id == 0 else 640)
+
     print("Loading models ...", end=" ", flush=True)
     app = FaceAnalysis(name="buffalo_l", root=str(weights_dir))
-    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+    app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size))
     print("OK\n")
 
     print("=" * 62)
@@ -173,6 +181,7 @@ async def main() -> None:
     print(f"  camera-id       : {args.camera_id}")
     print(f"  zone-id         : {args.zone_id}")
     print(f"  fps target      : {args.fps}")
+    print(f"  det size        : {det_size}x{det_size}")
     print(f"  inference       : {inference_label}")
     print(f"  display window  : {'yes  (press q to quit)' if args.show else 'no'}")
     print(f"  anti-spoofing   : {'BYPASSED — dev mode' if args.bypass_antispoofing else 'enabled'}")
@@ -186,7 +195,9 @@ async def main() -> None:
     # face vanishes and reappears (turn-away, occlusion). That is expected at
     # this stage — persistent identity comes from gallery recognition, and
     # appearance-assisted tracking (StrongSORT + ReID) arrives in Sprint 6.
-    tracker = ByteTracker(max_age=30, min_hits=3, iou_threshold=0.3,
+    # iou_threshold 0.2: face boxes are small, so even one frame of brisk
+    # movement costs a lot of relative overlap; 0.3 splits tracks on it
+    tracker = ByteTracker(max_age=30, min_hits=3, iou_threshold=0.2,
                           high_threshold=0.5, low_threshold=0.1)
 
     camera = CameraReader(source=source)
@@ -196,6 +207,12 @@ async def main() -> None:
             print("  macOS: check System Settings → Privacy & Security → Camera")
             print("         and grant access to Terminal (or your IDE).")
         sys.exit(1)
+
+    win_name = "third-eye | live  (q to quit)"
+    if args.show:
+        # resizable window scaled to fit the monitor — high-res RTSP frames
+        # (e.g. 2304x1296) otherwise overflow the desktop at 1:1
+        cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
 
     frame_count = 0
     unique_ids: set[int] = set()
@@ -249,7 +266,14 @@ async def main() -> None:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
 
         if args.show:
-            cv2.imshow("third-eye | live  (q to quit)", frame)
+            # downscale for display: cheaper to draw and fits the monitor
+            h, w = frame.shape[:2]
+            scale = min(1600 / w, 900 / h, 1.0)
+            disp = (
+                cv2.resize(frame, (int(w * scale), int(h * scale)))
+                if scale < 1.0 else frame
+            )
+            cv2.imshow(win_name, disp)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 producer.stop()
 

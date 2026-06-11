@@ -275,7 +275,9 @@ docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c \
 
 - [ ] 48 face-pipeline unit tests pass
 - [ ] buffalo_l weights present (`det_10g.onnx`, `w600k_r50.onnx`)
-- [ ] Live webcam: face detected with stable track ID at ~10 FPS
+- [ ] Live camera: face detected at ≥10 FPS; track ID stable while the face
+      stays in view (a new ID after the face leaves and returns is expected —
+      persistent identity is recognition's job, tested below)
 - [ ] `enroll.py` collects 10 crops and writes `persons` + `face_gallery` rows
 - [ ] Gallery row has a 512-dim embedding
 - [ ] pgvector search: own embedding → `accept` (~1.0), random vector → `reject`
