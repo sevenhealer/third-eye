@@ -173,10 +173,20 @@ back; tune toward 0.40 if revivals miss, never below 0.35), `--det-size 640`
 ## STEP 4 — Enroll yourself into the gallery
 
 ```bash
+# Mac (built-in webcam):
 .venv/bin/python scripts/enroll.py --name "Rohan" --role engineer
+# Linux GPU box (no webcam — use the RTSP feed):
+.venv/bin/python scripts/enroll.py --name "Rohan" --role engineer \
+  --source rtsp://<camera-ip>:8554/<stream>
 ```
 
 Look at the camera; it collects 10 face crops (~1–2 seconds).
+
+> Enroll on the machine whose database the next steps query — the gallery
+> row is written to the local Postgres, so enrolling on the Mac does NOT
+> populate the Linux box's gallery.
+> Headless OpenCV (Linux): no preview window opens; crop progress prints
+> to the console instead, Ctrl+C aborts.
 
 **Expected:**
 ```

@@ -26,6 +26,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
 ON_MAC = platform.system() == "Darwin"
 ON_APPLE_SILICON = ON_MAC and platform.machine() == "arm64"
 
@@ -68,19 +70,25 @@ def main() -> None:
 
     from insightface.app import FaceAnalysis
 
+    # must run before any ONNX session is created, or the CUDA provider
+    # fails to find libcublasLt/libcudnn and silently falls back to CPU
+    from src.core.gpu_manager import preload_cuda_libraries
+    preload_cuda_libraries()
+
     ctx_id, mode_label = _detect_ctx_id(force_cpu=args.cpu)
     weights_dir = Path(args.root)
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Platform       : {platform.system()} {platform.machine()}")
     print(f"Inference mode : {mode_label}")
-    print(f"Download target: {weights_dir}/buffalo_l/")
+    print(f"Download target: {weights_dir}/models/buffalo_l/")
     print("Downloading buffalo_l pack (~200 MB) ...\n")
 
     app = FaceAnalysis(name="buffalo_l", root=str(weights_dir))
     app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
-    buffalo_dir = weights_dir / "buffalo_l"
+    # insightface unpacks under <root>/models/<pack-name>/
+    buffalo_dir = weights_dir / "models" / "buffalo_l"
     if buffalo_dir.exists():
         files = sorted(buffalo_dir.iterdir())
         print(f"\nDownloaded {len(files)} file(s):")

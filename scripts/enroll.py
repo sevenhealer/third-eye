@@ -8,6 +8,7 @@ and inserts it into the pgvector gallery via the third-eye API.
 Usage:
   python scripts/enroll.py --name "John Doe"
   python scripts/enroll.py --name "Jane" --source 1 --crops 15
+  python scripts/enroll.py --name "Rohan" --source rtsp://192.168.1.x:8554/stream
 
 Prerequisites:
   - python scripts/download_models.py
@@ -18,6 +19,7 @@ import argparse
 import asyncio
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -71,6 +73,11 @@ async def main() -> None:
 
     _set_minimal_env()
 
+    # must run before any ONNX session is created, or the CUDA provider
+    # fails to find libcublasLt/libcudnn and silently falls back to CPU
+    from src.core.gpu_manager import preload_cuda_libraries
+    preload_cuda_libraries()
+
     try:
         import onnxruntime as ort
         ctx_id = 0 if "CUDAExecutionProvider" in ort.get_available_providers() else -1
@@ -88,7 +95,19 @@ async def main() -> None:
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         print(f"ERROR: Cannot open camera '{source}'")
+        if str(source).isdigit():
+            print("No local webcam? Pass an RTSP stream: --source rtsp://...")
         sys.exit(1)
+
+    # opencv-python-headless (typical on the Linux GPU box) has no GUI —
+    # fall back to console-only progress instead of crashing on imshow
+    win_name = "Enrollment — press q to abort"
+    show_window = True
+    try:
+        cv2.namedWindow(win_name)
+    except cv2.error:
+        show_window = False
+        print("(headless OpenCV build: no preview window, progress prints below; Ctrl+C to abort)")
 
     print(f"\nEnrolling '{args.name}' — collecting {args.crops} crops.")
     print("Center your face in the frame. Press 'q' to abort.\n")
@@ -119,15 +138,19 @@ async def main() -> None:
                 )
                 print(f"  Crop {len(embeddings):>2}/{args.crops} captured.")
 
-        cv2.imshow("Enrollment — press q to abort", frame)
-        if cv2.waitKey(100) & 0xFF == ord("q"):
-            cap.release()
-            cv2.destroyAllWindows()
-            print("Aborted.")
-            sys.exit(0)
+        if show_window:
+            cv2.imshow(win_name, frame)
+            if cv2.waitKey(100) & 0xFF == ord("q"):
+                cap.release()
+                cv2.destroyAllWindows()
+                print("Aborted.")
+                sys.exit(0)
+        else:
+            time.sleep(0.1)   # same pacing waitKey(100) provided
 
     cap.release()
-    cv2.destroyAllWindows()
+    if show_window:
+        cv2.destroyAllWindows()
 
     if len(embeddings) < args.crops:
         print(f"Only {len(embeddings)} crops collected (need {args.crops}). Aborting.")
