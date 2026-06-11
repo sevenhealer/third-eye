@@ -180,9 +180,11 @@ back; tune toward 0.40 if revivals miss, never below 0.35), `--det-size 640`
   --source rtsp://<camera-ip>:8554/<stream>
 ```
 
-Capture is guided: for each pose (straight / left / right / up / down) press
-Enter, hold the pose, and it captures 2 crops — 10 total. Spreading crops
-across poses makes the mean embedding far more robust than a 1-second burst.
+Capture is automatic (FaceID-style pose cells): move your head slowly —
+straight, left, right, up, down — and crops are taken the moment each pose
+is reached (2 per pose, 10 total). The console/overlay shows which poses
+are still pending plus your live yaw/pitch. No key presses during capture;
+3-minute timeout if poses can't be reached.
 
 > Enroll on the machine whose database the next steps query — the gallery
 > row is written to the local Postgres, so enrolling on the Mac does NOT

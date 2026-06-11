@@ -40,15 +40,31 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-# capture is guided pose-by-pose: 10 burst frames of one pose average into a
-# one-pose embedding; spreading crops over poses makes the mean robust
-POSES = [
-    "Look STRAIGHT at the camera",
-    "Turn your head slightly LEFT",
-    "Turn your head slightly RIGHT",
-    "Tilt your head UP a little",
-    "Tilt your head DOWN a little",
+# Pose-cell enrollment (FaceID-style): buckets over (yaw, pitch) fill
+# automatically as the head moves through them — no keyboard interaction
+# during capture, the frame loop never blocks, the preview stays live.
+# insightface's landmark_3d_68 provides face.pose = [pitch, yaw, roll] (deg).
+POSE_BUCKETS: list[tuple[str, str]] = [
+    ("straight", "Look STRAIGHT at the camera"),
+    ("left",     "Turn your head LEFT"),
+    ("right",    "Turn your head RIGHT"),
+    ("up",       "Tilt your head UP"),
+    ("down",     "Tilt your head DOWN"),
 ]
+
+
+def _pose_bucket(yaw: float, pitch: float) -> str | None:
+    if abs(yaw) < 12 and abs(pitch) < 12:
+        return "straight"
+    if yaw <= -18:
+        return "left"
+    if yaw >= 18:
+        return "right"
+    if pitch >= 14:
+        return "up"
+    if pitch <= -14:
+        return "down"
+    return None   # between cells — too ambiguous to file anywhere
 
 
 def _set_minimal_env() -> None:
@@ -123,68 +139,83 @@ async def main() -> None:
         show_window = False
         print("(headless OpenCV build: no preview window, progress prints below; Ctrl+C to abort)")
 
-    print(f"\nEnrolling '{args.name}' — {args.crops} crops guided across "
-          f"{len(POSES)} poses.")
-    print("Hold each pose until its crops are captured. Ctrl+C aborts.\n")
+    base, rem = divmod(args.crops, len(POSE_BUCKETS))
+    need: dict[str, int] = {
+        name: base + (1 if i < rem else 0)
+        for i, (name, _) in enumerate(POSE_BUCKETS)
+    }
+    hints = dict(POSE_BUCKETS)
+
+    print(f"\nEnrolling '{args.name}' — {args.crops} crops across "
+          f"{len(POSE_BUCKETS)} head poses.")
+    print("Move your head slowly: straight, left, right, up, down.")
+    print("Crops are captured automatically when a pose is reached. "
+          "Ctrl+C aborts.\n")
 
     embeddings: list[np.ndarray] = []
+    deadline = time.monotonic() + 180.0
+    last_capture = 0.0
+    last_status = 0.0
 
-    base, rem = divmod(args.crops, len(POSES))
-    for pose_i, pose in enumerate(POSES):
-        quota = base + (1 if pose_i < rem else 0)
-        if quota == 0:
-            continue
-        input(f">>> {pose} — press Enter to capture {quota} crop(s) ... ")
+    while any(need.values()):
+        if time.monotonic() > deadline:
+            print("Timed out after 3 min — check framing/lighting. Aborting.")
+            cap.release()
+            sys.exit(1)
 
-        # drain frames buffered while waiting at the prompt, otherwise the
-        # crops show the PREVIOUS pose (RTSP buffers aggressively)
-        for _ in range(10):
-            cap.grab()
+        ok, frame = cap.read()
+        if not ok:
+            print("Camera read failed.")
+            cap.release()
+            sys.exit(1)
 
-        got = 0
-        no_face_reads = 0
-        while got < quota:
-            ok, frame = cap.read()
-            if not ok:
-                print("Camera read failed.")
-                cap.release()
-                sys.exit(1)
+        faces = app.get(frame)
+        # Use the largest detected face (closest to camera)
+        face = max(
+            faces,
+            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+        ) if faces else None
 
-            faces = app.get(frame)
-            # Use the largest detected face (closest to camera)
-            face = max(
-                faces,
-                key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-            ) if faces else None
+        pending = [n for n, q in need.items() if q > 0]
+        hint = hints[pending[0]]
+        pose_txt = "no face"
 
-            if face is not None and face.normed_embedding is not None:
+        if (
+            face is not None
+            and face.normed_embedding is not None
+            and getattr(face, "pose", None) is not None
+        ):
+            pitch, yaw = float(face.pose[0]), float(face.pose[1])
+            pose_txt = f"yaw {yaw:+.0f}  pitch {pitch:+.0f}"
+            bucket = _pose_bucket(yaw, pitch)
+            if (
+                bucket in pending
+                and time.monotonic() - last_capture >= 0.4
+            ):
                 embeddings.append(face.normed_embedding.copy())
-                got += 1
-                no_face_reads = 0
-                bbox = face.bbox.astype(int)
-                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
-                cv2.putText(
-                    frame,
-                    f"Collected {len(embeddings)}/{args.crops}",
-                    (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2,
-                )
-                print(f"  Crop {len(embeddings):>2}/{args.crops} captured ({pose.lower()}).")
-            else:
-                no_face_reads += 1
-                if no_face_reads >= 100:
-                    print("No face found for ~30 s — check framing/lighting. Aborting.")
-                    cap.release()
-                    sys.exit(1)
+                need[bucket] -= 1
+                last_capture = time.monotonic()
+                print(f"  Crop {len(embeddings):>2}/{args.crops} captured "
+                      f"({bucket}, yaw {yaw:+.0f}, pitch {pitch:+.0f}).")
+            bbox = face.bbox.astype(int)
+            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
 
-            if show_window:
-                cv2.imshow(win_name, frame)
-                if cv2.waitKey(300) & 0xFF == ord("q"):
-                    cap.release()
-                    cv2.destroyAllWindows()
-                    print("Aborted.")
-                    sys.exit(0)
-            else:
-                time.sleep(0.3)   # space crops out — consecutive frames add nothing
+        if show_window:
+            cv2.putText(frame, f">>> {hint}", (10, 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 220, 0), 2)
+            cv2.putText(frame,
+                        f"{len(embeddings)}/{args.crops}   {pose_txt}   "
+                        f"pending: {', '.join(pending)}",
+                        (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 0), 2)
+            cv2.imshow(win_name, frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                cap.release()
+                cv2.destroyAllWindows()
+                print("Aborted.")
+                sys.exit(0)
+        elif time.monotonic() - last_status > 3.0:
+            last_status = time.monotonic()
+            print(f"  ... {hint}   ({pose_txt}; pending: {', '.join(pending)})")
 
     cap.release()
     if show_window:
