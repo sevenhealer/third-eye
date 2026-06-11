@@ -188,7 +188,13 @@ class StrongSortTracker:
             del self._tracks[tid]
             del self._kalman[tid]
 
-        return [t for t in self._tracks.values() if t.state == "confirmed"]
+        # Coasting tracks (unmatched this frame) keep a stale bbox — emitting
+        # them paints frozen ghost boxes, so only report tracks updated now.
+        return [
+            t
+            for t in self._tracks.values()
+            if t.state == "confirmed" and t.time_since_update == 0
+        ]
 
     def reset(self) -> None:
         self._kalman.clear()

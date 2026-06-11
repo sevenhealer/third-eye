@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from src.object_detection.detector import ObjectDetection
 from src.tracking.strong_sort import ReidTrack, StrongSortTracker
@@ -137,3 +136,15 @@ def test_no_embeddings_falls_back_to_iou():
     result = tracker.update([det])
     # Track confirmed via IoU only, no embeddings supplied
     assert len(result) == 1
+
+
+def test_coasting_track_not_emitted():
+    """A confirmed track that missed this frame must not report a stale bbox."""
+    tracker = fresh(min_hits=1, max_age=5)
+    det = _det(conf=0.9)
+    assert len(tracker.update([det])) == 1   # confirmed and matched
+    assert tracker.update([]) == []          # coasting: suppressed, not deleted
+    assert tracker.active_track_count == 1
+    result = tracker.update([det])           # same id returns on re-detection
+    assert len(result) == 1
+    assert result[0].time_since_update == 0

@@ -5,10 +5,8 @@ from src.object_detection.detector import ObjectDetection
 from src.tracking.tracker import (
     ByteTracker,
     KalmanBoxTracker,
-    TrackedObject,
     hungarian_match,
     iou,
-    iou_matrix,
 )
 
 

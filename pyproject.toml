@@ -12,6 +12,10 @@ description = "Local-first visual intelligence platform"
 requires-python = ">=3.11"
 dependencies = [
     # Core ML
+    # CUDA alignment (Linux GPU boxes): PyPI torch ships CUDA 13 builds but
+    # stable onnxruntime-gpu is CUDA 12 — mixing them breaks the CUDA
+    # provider (libcublasLt.so.12 not found). Install torch from the cu128
+    # index BEFORE `pip install -e .`:  make install-gpu
     "torch>=2.2.0",
     "torchvision>=0.17.0",
     "torchaudio>=2.2.0",

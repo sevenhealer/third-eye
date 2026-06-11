@@ -1,4 +1,4 @@
-.PHONY: help up down logs shell test lint format check-env setup
+.PHONY: help up down logs shell test lint format check-env setup install install-gpu
 
 COMPOSE = docker compose
 APP_SERVICE = api
@@ -7,6 +7,8 @@ help:
 	@echo "Third-Eye Visual Intelligence Platform"
 	@echo ""
 	@echo "  make setup        Copy .env.example → .env (first time)"
+	@echo "  make install      Install deps into .venv (Mac / CPU dev)"
+	@echo "  make install-gpu  Install deps into .venv (Linux + NVIDIA GPU)"
 	@echo "  make up           Start all services"
 	@echo "  make down         Stop all services"
 	@echo "  make logs         Follow logs from all services"
@@ -24,6 +26,18 @@ setup:
 
 check-env:
 	@test -f .env || (echo "ERROR: .env not found. Run 'make setup' first." && exit 1)
+
+install:
+	.venv/bin/pip install -e ".[dev]"
+
+# Linux GPU: torch must come from the cu128 index BEFORE the editable install.
+# PyPI torch ships CUDA 13 builds; stable onnxruntime-gpu is CUDA 12 — mixed
+# runtimes break the CUDA provider (libcublasLt.so.12 not found, silent CPU
+# fallback). Installing torch cu128 first pins the whole venv to CUDA 12.
+install-gpu:
+	.venv/bin/pip install torch torchvision torchaudio \
+		--index-url https://download.pytorch.org/whl/cu128
+	.venv/bin/pip install -e ".[dev]"
 
 up: check-env
 	$(COMPOSE) up -d --build

@@ -182,6 +182,10 @@ async def main() -> None:
     from src.object_detection.detector import ObjectDetection
     from src.tracking.tracker import ByteTracker
 
+    # NOTE: IoU-only tracking on small face boxes will reassign the ID when a
+    # face vanishes and reappears (turn-away, occlusion). That is expected at
+    # this stage — persistent identity comes from gallery recognition, and
+    # appearance-assisted tracking (StrongSORT + ReID) arrives in Sprint 6.
     tracker = ByteTracker(max_age=30, min_hits=3, iou_threshold=0.3,
                           high_threshold=0.5, low_threshold=0.1)
 
@@ -210,7 +214,6 @@ async def main() -> None:
         raw_faces = app.get(frame)
 
         # Wrap insightface detections as ObjectDetection for ByteTracker
-        import numpy as _np
         dets: list[ObjectDetection] = []
         for face in raw_faces:
             dets.append(

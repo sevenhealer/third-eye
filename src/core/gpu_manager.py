@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterator, Iterator
 
 try:
     import torch

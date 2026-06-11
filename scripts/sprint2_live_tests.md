@@ -15,6 +15,52 @@ Prerequisites from Sprint 1:
 
 ---
 
+## Linux GPU setup — CUDA version alignment (one-time)
+
+PyPI's default torch wheels are **CUDA 13** builds, but stable
+`onnxruntime-gpu` is **CUDA 12**. With mismatched runtimes the CUDA provider
+fails to load (`libcublasLt.so.12: cannot open shared object file`) and all
+ONNX inference silently falls back to CPU — GPU idle, CPU pegged.
+
+Install torch from the cu128 index BEFORE the editable install (or run
+`make install-gpu`, which does both):
+
+```bash
+.venv/bin/pip install torch torchvision torchaudio \
+  --index-url https://download.pytorch.org/whl/cu128
+.venv/bin/pip install -e ".[dev]"
+```
+
+If a CUDA-13 torch is already installed, remove it and its nvidia wheels
+first (the cu12/cu13 cuDNN wheels overlap on disk):
+
+```bash
+.venv/bin/pip uninstall -y torch torchvision torchaudio \
+  $(.venv/bin/pip list | grep -i nvidia | awk '{print $1}' | tr '\n' ' ')
+```
+
+Verify both stacks see the GPU:
+
+```bash
+.venv/bin/python -c "
+import torch; print('torch CUDA:', torch.cuda.is_available(), torch.version.cuda)
+from src.core.gpu_manager import preload_cuda_libraries; preload_cuda_libraries()
+import onnxruntime as ort
+s = ort.InferenceSession('models/weights/models/buffalo_l/genderage.onnx',
+                         providers=['CUDAExecutionProvider'])
+print('ORT providers:', s.get_providers())
+"
+```
+
+**Expected:** `torch CUDA: True 12.8` and `CUDAExecutionProvider` first in the
+ORT list. While the live feed runs, `nvidia-smi -l 1` should show activity.
+
+> Also note: only `onnxruntime-gpu` may be installed on Linux — if plain
+> `onnxruntime` (CPU) sneaks in, the two clobber the same module directory and
+> CUDA disappears. Fix: uninstall **both**, reinstall `onnxruntime-gpu`.
+
+---
+
 ## STEP 0 — Start infrastructure
 
 ```bash
