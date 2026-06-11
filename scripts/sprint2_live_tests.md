@@ -180,13 +180,18 @@ back; tune toward 0.40 if revivals miss, never below 0.35), `--det-size 640`
   --source rtsp://<camera-ip>:8554/<stream>
 ```
 
-Look at the camera; it collects 10 face crops (~1–2 seconds).
+Capture is guided: for each pose (straight / left / right / up / down) press
+Enter, hold the pose, and it captures 2 crops — 10 total. Spreading crops
+across poses makes the mean embedding far more robust than a 1-second burst.
 
 > Enroll on the machine whose database the next steps query — the gallery
 > row is written to the local Postgres, so enrolling on the Mac does NOT
 > populate the Linux box's gallery.
 > Headless OpenCV (Linux): no preview window opens; crop progress prints
 > to the console instead, Ctrl+C aborts.
+> Re-running enroll with the same --name adds another embedding to the SAME
+> person (better recognition) instead of creating a duplicate identity;
+> use --new-person for an actual different person with the same name.
 
 **Expected:**
 ```
@@ -214,7 +219,9 @@ docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c \
    FROM persons p JOIN face_gallery g USING (person_id);"
 ```
 
-**Expected:** One row: `Rohan | engineer | 0.85 | 512`
+**Expected:** One row per enrollment run: `Rohan | engineer | 0.85 | 512`
+(multiple rows are fine if you enrolled more than once — they should all
+join to the SAME person_id after the duplicate-person fix)
 
 ---
 

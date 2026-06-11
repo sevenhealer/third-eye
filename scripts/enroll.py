@@ -34,7 +34,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--crops", type=int, default=10,
                    help="Number of face crops to collect (default 10)")
     p.add_argument("--role", default="visitor", help="Person role in DB (default visitor)")
+    p.add_argument("--new-person", action="store_true",
+                   help="Create a separate person even if the name is already "
+                        "enrolled (default: add this embedding to the existing person)")
     return p.parse_args()
+
+
+# capture is guided pose-by-pose: 10 burst frames of one pose average into a
+# one-pose embedding; spreading crops over poses makes the mean robust
+POSES = [
+    "Look STRAIGHT at the camera",
+    "Turn your head slightly LEFT",
+    "Turn your head slightly RIGHT",
+    "Tilt your head UP a little",
+    "Tilt your head DOWN a little",
+]
 
 
 def _set_minimal_env() -> None:
@@ -109,26 +123,44 @@ async def main() -> None:
         show_window = False
         print("(headless OpenCV build: no preview window, progress prints below; Ctrl+C to abort)")
 
-    print(f"\nEnrolling '{args.name}' — collecting {args.crops} crops.")
-    print("Center your face in the frame. Press 'q' to abort.\n")
+    print(f"\nEnrolling '{args.name}' — {args.crops} crops guided across "
+          f"{len(POSES)} poses.")
+    print("Hold each pose until its crops are captured. Ctrl+C aborts.\n")
 
     embeddings: list[np.ndarray] = []
 
-    while len(embeddings) < args.crops:
-        ok, frame = cap.read()
-        if not ok:
-            print("Camera read failed.")
-            break
+    base, rem = divmod(args.crops, len(POSES))
+    for pose_i, pose in enumerate(POSES):
+        quota = base + (1 if pose_i < rem else 0)
+        if quota == 0:
+            continue
+        input(f">>> {pose} — press Enter to capture {quota} crop(s) ... ")
 
-        faces = app.get(frame)
-        # Use the largest detected face (closest to camera)
-        if faces:
+        # drain frames buffered while waiting at the prompt, otherwise the
+        # crops show the PREVIOUS pose (RTSP buffers aggressively)
+        for _ in range(10):
+            cap.grab()
+
+        got = 0
+        no_face_reads = 0
+        while got < quota:
+            ok, frame = cap.read()
+            if not ok:
+                print("Camera read failed.")
+                cap.release()
+                sys.exit(1)
+
+            faces = app.get(frame)
+            # Use the largest detected face (closest to camera)
             face = max(
                 faces,
                 key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-            )
-            if face.normed_embedding is not None:
+            ) if faces else None
+
+            if face is not None and face.normed_embedding is not None:
                 embeddings.append(face.normed_embedding.copy())
+                got += 1
+                no_face_reads = 0
                 bbox = face.bbox.astype(int)
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
                 cv2.putText(
@@ -136,17 +168,23 @@ async def main() -> None:
                     f"Collected {len(embeddings)}/{args.crops}",
                     (10, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2,
                 )
-                print(f"  Crop {len(embeddings):>2}/{args.crops} captured.")
+                print(f"  Crop {len(embeddings):>2}/{args.crops} captured ({pose.lower()}).")
+            else:
+                no_face_reads += 1
+                if no_face_reads >= 100:
+                    print("No face found for ~30 s — check framing/lighting. Aborting.")
+                    cap.release()
+                    sys.exit(1)
 
-        if show_window:
-            cv2.imshow(win_name, frame)
-            if cv2.waitKey(100) & 0xFF == ord("q"):
-                cap.release()
-                cv2.destroyAllWindows()
-                print("Aborted.")
-                sys.exit(0)
-        else:
-            time.sleep(0.1)   # same pacing waitKey(100) provided
+            if show_window:
+                cv2.imshow(win_name, frame)
+                if cv2.waitKey(300) & 0xFF == ord("q"):
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    print("Aborted.")
+                    sys.exit(0)
+            else:
+                time.sleep(0.3)   # space crops out — consecutive frames add nothing
 
     cap.release()
     if show_window:
@@ -161,9 +199,7 @@ async def main() -> None:
     if norm > 1e-10:
         mean_emb /= norm
 
-    person_id = str(uuid.uuid4())
     print(f"\nComputed mean embedding from {len(embeddings)} crops.")
-    print(f"person_id = {person_id}")
     print("Saving to gallery ...")
 
     from sqlalchemy import text
@@ -173,16 +209,34 @@ async def main() -> None:
 
     gallery = FaceGallery()
     try:
-        # persons row must exist first — face_gallery.person_id is a FK to it
         async with get_db_session() as session:
-            await session.execute(
-                text(
-                    "INSERT INTO persons (person_id, display_name, role) "
-                    "VALUES (:pid, :name, :role)"
-                ),
-                {"pid": person_id, "name": args.name, "role": args.role},
-            )
-            await session.commit()
+            existing = (
+                await session.execute(
+                    text("SELECT person_id FROM persons WHERE display_name = :name LIMIT 1"),
+                    {"name": args.name},
+                )
+            ).fetchone()
+
+        if existing and not args.new_person:
+            # re-enrollment: extra embeddings improve recognition of the SAME
+            # person — a duplicate persons row would split their identity
+            person_id = str(existing[0])
+            print(f"'{args.name}' is already enrolled — adding this embedding "
+                  f"to the same person ({person_id}).")
+            print("(use --new-person if this is genuinely a different person)")
+        else:
+            person_id = str(uuid.uuid4())
+            # persons row must exist first — face_gallery.person_id is a FK to it
+            async with get_db_session() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO persons (person_id, display_name, role) "
+                        "VALUES (:pid, :name, :role)"
+                    ),
+                    {"pid": person_id, "name": args.name, "role": args.role},
+                )
+                await session.commit()
+        print(f"person_id = {person_id}")
         eid = await gallery.add_embedding(
             person_id=person_id,
             embedding=mean_emb,
