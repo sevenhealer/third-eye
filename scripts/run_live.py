@@ -53,6 +53,15 @@ def parse_args() -> argparse.Namespace:
                    help="Face detector input size (default: 960 on GPU, 640 "
                         "on CPU). Larger finds small/distant faces on "
                         "high-res streams at some speed cost.")
+    p.add_argument("--det-thresh", type=float, default=0.6,
+                   help="Face detection confidence threshold (default 0.6; "
+                        "insightface default is 0.5). Raise to suppress "
+                        "low-light false faces on furniture/dark corners, "
+                        "lower if real faces in dim areas are missed.")
+    p.add_argument("--min-face", type=int, default=24,
+                   help="Discard face boxes smaller than this many pixels on "
+                        "their short side (default 24). Filters tiny low-light "
+                        "phantom detections that also embed too poorly to track.")
     p.add_argument("--show", action="store_true",
                    help="Open a cv2 window (requires opencv-python, not headless)")
     p.add_argument("--cpu", action="store_true",
@@ -172,7 +181,8 @@ async def main() -> None:
 
     print("Loading models ...", end=" ", flush=True)
     app = FaceAnalysis(name="buffalo_l", root=str(weights_dir))
-    app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size))
+    app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size),
+                det_thresh=args.det_thresh)
     print("OK\n")
 
     print("=" * 62)
@@ -182,6 +192,8 @@ async def main() -> None:
     print(f"  zone-id         : {args.zone_id}")
     print(f"  fps target      : {args.fps}")
     print(f"  det size        : {det_size}x{det_size}")
+    print(f"  det thresh      : {args.det_thresh}")
+    print(f"  min face px     : {args.min_face}")
     print(f"  inference       : {inference_label}")
     print(f"  display window  : {'yes  (press q to quit)' if args.show else 'no'}")
     print(f"  anti-spoofing   : {'BYPASSED — dev mode' if args.bypass_antispoofing else 'enabled'}")
@@ -191,14 +203,16 @@ async def main() -> None:
     from src.object_detection.detector import ObjectDetection
     from src.tracking.tracker import ByteTracker
 
-    # NOTE: IoU-only tracking on small face boxes will reassign the ID when a
-    # face vanishes and reappears (turn-away, occlusion). That is expected at
-    # this stage — persistent identity comes from gallery recognition, and
-    # appearance-assisted tracking (StrongSORT + ReID) arrives in Sprint 6.
     # iou_threshold 0.2: face boxes are small, so even one frame of brisk
-    # movement costs a lot of relative overlap; 0.3 splits tracks on it
-    tracker = ByteTracker(max_age=30, min_hits=3, iou_threshold=0.2,
-                          high_threshold=0.5, low_threshold=0.1)
+    # movement costs a lot of relative overlap; 0.3 splits tracks on it.
+    # max_age 90 (~6 s at 15 fps) keeps a lost track alive through feed
+    # stalls and turn-aways; ByteTracker's appearance stage then revives the
+    # old ID from the face embedding when IoU can't bridge the gap.
+    # appearance_threshold 0.45 matches face_match_accept_threshold — below
+    # that, wrongly merging two people is worse than a fresh ID.
+    tracker = ByteTracker(max_age=90, min_hits=3, iou_threshold=0.2,
+                          high_threshold=0.5, low_threshold=0.1,
+                          appearance_threshold=0.45)
 
     camera = CameraReader(source=source)
     if not camera.open():
@@ -233,12 +247,16 @@ async def main() -> None:
         # Wrap insightface detections as ObjectDetection for ByteTracker
         dets: list[ObjectDetection] = []
         for face in raw_faces:
+            bbox = face.bbox.astype("float32")
+            if min(bbox[2] - bbox[0], bbox[3] - bbox[1]) < args.min_face:
+                continue
             dets.append(
                 ObjectDetection(
-                    bbox=face.bbox.astype("float32"),
+                    bbox=bbox,
                     class_id=0,
                     class_name="person",
                     confidence=float(face.det_score),
+                    embedding=getattr(face, "normed_embedding", None),
                 )
             )
 

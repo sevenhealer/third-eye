@@ -133,6 +133,11 @@ class KalmanBoxTracker:
         return self._to_bbox()
 
 
+def _normalize(emb: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(emb))
+    return emb / norm if norm > 0 else emb
+
+
 # ── Track dataclass ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -145,6 +150,7 @@ class TrackedObject:
     hits: int = 1
     time_since_update: int = 0
     state: str = "tentative"   # tentative | confirmed | deleted
+    embedding: np.ndarray | None = None   # EMA appearance embedding, L2-normalized
 
 
 # ── ByteTracker ───────────────────────────────────────────────────────────────
@@ -153,9 +159,13 @@ class ByteTracker:
     """
     ByteTrack multi-object tracker.
 
-    Two-stage matching:
+    Three-stage matching:
       Stage 1 — high-confidence detections vs. all active tracks (IoU)
       Stage 2 — low-confidence detections vs. remaining unmatched tracks
+      Stage 3 — appearance re-association: unmatched high-conf detections
+                vs. remaining tracks by embedding cosine similarity. Recovers
+                a track that jumped too far for IoU (feed stall, occlusion,
+                re-entry) when detections carry embeddings; no-op otherwise.
     Unmatched high-conf detections start new tentative tracks.
     Tracks confirmed after min_hits matches; deleted after max_age misses.
     """
@@ -169,12 +179,16 @@ class ByteTracker:
         iou_threshold: float = 0.3,
         high_threshold: float = 0.6,
         low_threshold: float = 0.1,
+        appearance_threshold: float = 0.45,
+        ema_alpha: float = 0.9,
     ) -> None:
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
         self.high_threshold = high_threshold
         self.low_threshold = low_threshold
+        self.appearance_threshold = appearance_threshold
+        self.ema_alpha = ema_alpha
         self._kalman: dict[int, KalmanBoxTracker] = {}
         self._tracks: dict[int, TrackedObject] = {}
 
@@ -190,16 +204,27 @@ class ByteTracker:
             class_id=det.class_id,
             class_name=det.class_name,
             confidence=det.confidence,
+            embedding=_normalize(det.embedding) if det.embedding is not None else None,
         )
         if t.hits >= self.min_hits:
             t.state = "confirmed"
         return t
+
+    def _update_embedding(self, t: TrackedObject, emb: np.ndarray) -> None:
+        emb = _normalize(emb)
+        if t.embedding is None:
+            t.embedding = emb
+        else:
+            t.embedding = _normalize(
+                self.ema_alpha * t.embedding + (1.0 - self.ema_alpha) * emb
+            )
 
     def _match_and_update(
         self,
         dets: list[ObjectDetection],
         track_ids: list[int],
         predicted: dict[int, np.ndarray],
+        update_embeddings: bool = True,
     ) -> tuple[set[int], list[int]]:
         """Match dets against track_ids; return (matched_track_ids, unmatched_det_indices)."""
         if not dets or not track_ids:
@@ -221,8 +246,52 @@ class ByteTracker:
             t.hits += 1
             if t.hits >= self.min_hits:
                 t.state = "confirmed"
+            if update_embeddings and dets[det_i].embedding is not None:
+                self._update_embedding(t, dets[det_i].embedding)
             matched_ids.add(tid)
         return matched_ids, unmatched_dets
+
+    def _reassociate_by_appearance(
+        self, high: list[ObjectDetection], unmatched_high: list[int], matched_all: set[int]
+    ) -> list[int]:
+        """Stage 3: revive unmatched tracks from unmatched high-conf detections
+        by embedding similarity. Mutates matched_all; returns the still-unmatched
+        detection indices."""
+        cand = [i for i in unmatched_high if high[i].embedding is not None]
+        track_ids = [
+            tid for tid, t in self._tracks.items()
+            if tid not in matched_all and t.embedding is not None
+        ]
+        if not cand or not track_ids:
+            return unmatched_high
+
+        sim = np.zeros((len(cand), len(track_ids)), dtype=np.float32)
+        for r, det_i in enumerate(cand):
+            d_emb = _normalize(high[det_i].embedding)
+            for c, tid in enumerate(track_ids):
+                t = self._tracks[tid]
+                if t.class_id == high[det_i].class_id:
+                    sim[r, c] = float(d_emb @ t.embedding)
+
+        matches, _, _ = hungarian_match(sim, self.appearance_threshold)
+        revived: set[int] = set()
+        for r, c in matches:
+            det_i, tid = cand[r], track_ids[c]
+            det = high[det_i]
+            # motion state is stale after the gap — restart the filter at the
+            # new position instead of dragging the old velocity across the jump
+            self._kalman[tid] = KalmanBoxTracker(det.bbox)
+            t = self._tracks[tid]
+            t.bbox = det.bbox.copy()
+            t.confidence = det.confidence
+            t.time_since_update = 0
+            t.hits += 1
+            if t.hits >= self.min_hits:
+                t.state = "confirmed"
+            self._update_embedding(t, det.embedding)
+            matched_all.add(tid)
+            revived.add(det_i)
+        return [i for i in unmatched_high if i not in revived]
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -242,11 +311,18 @@ class ByteTracker:
         # Stage 1: high-conf dets vs. all active tracks
         matched1, unmatched_high = self._match_and_update(high, active_ids, predicted)
 
-        # Stage 2: low-conf dets vs. remaining unmatched tracks
+        # Stage 2: low-conf dets vs. remaining unmatched tracks.
+        # Low-conf boxes are usually occluded/blurred — don't let them
+        # contaminate the appearance EMA.
         remaining_ids = [tid for tid in active_ids if tid not in matched1]
-        matched2, _ = self._match_and_update(low, remaining_ids, predicted)
+        matched2, _ = self._match_and_update(
+            low, remaining_ids, predicted, update_embeddings=False
+        )
 
         matched_all = matched1 | matched2
+
+        # Stage 3: appearance re-association for tracks IoU couldn't recover
+        unmatched_high = self._reassociate_by_appearance(high, unmatched_high, matched_all)
 
         # New tracks from unmatched high-conf detections
         for det_i in unmatched_high:

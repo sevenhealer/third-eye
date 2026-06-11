@@ -22,6 +22,7 @@ class ObjectDetection:
     class_id: int
     class_name: str
     confidence: float
+    embedding: np.ndarray | None = None   # appearance vector (e.g. face embedding) for ReID-assisted tracking
 
 
 class YOLODetector:

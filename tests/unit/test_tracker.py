@@ -10,13 +10,21 @@ from src.tracking.tracker import (
 )
 
 
-def _det(x1=100, y1=100, x2=200, y2=200, cls_id=0, conf=0.9, name="person"):
+def _det(x1=100, y1=100, x2=200, y2=200, cls_id=0, conf=0.9, name="person",
+         emb=None):
     return ObjectDetection(
         bbox=np.array([x1, y1, x2, y2], dtype="float32"),
         class_id=cls_id,
         class_name=name,
         confidence=conf,
+        embedding=emb,
     )
+
+
+def _emb(axis: int, dim: int = 512) -> np.ndarray:
+    e = np.zeros(dim, dtype="float32")
+    e[axis] = 1.0
+    return e
 
 
 def fresh_tracker(**kw) -> ByteTracker:
@@ -145,6 +153,62 @@ def test_track_deleted_after_max_age():
     result = tracker.update([])        # miss 3 > max_age=2 → deleted
     assert result == []
     assert tracker.active_track_count == 0
+
+
+# ── appearance re-association (stage 3) ──────────────────────────────────────
+
+def test_appearance_revives_id_after_position_jump():
+    """Feed stall / occlusion: the subject reappears far from the Kalman
+    prediction, so IoU fails — the face embedding must bring the ID back."""
+    tracker = fresh_tracker(min_hits=1, max_age=10, high_threshold=0.6)
+    same_face = _emb(0)
+    r1 = tracker.update([_det(100, 100, 200, 200, conf=0.9, emb=same_face)])
+    tid = r1[0].track_id
+    tracker.update([])   # gap frame 1
+    tracker.update([])   # gap frame 2
+    r2 = tracker.update([_det(500, 500, 600, 600, conf=0.9, emb=same_face)])
+    assert len(r2) == 1
+    assert r2[0].track_id == tid
+
+
+def test_appearance_mismatch_creates_new_id():
+    tracker = fresh_tracker(min_hits=1, max_age=10, high_threshold=0.6)
+    r1 = tracker.update([_det(100, 100, 200, 200, conf=0.9, emb=_emb(0))])
+    tracker.update([])
+    r2 = tracker.update([_det(500, 500, 600, 600, conf=0.9, emb=_emb(1))])
+    assert r2[0].track_id != r1[0].track_id
+
+
+def test_no_embedding_keeps_iou_only_behavior():
+    tracker = fresh_tracker(min_hits=1, max_age=10, high_threshold=0.6)
+    r1 = tracker.update([_det(100, 100, 200, 200, conf=0.9)])
+    tracker.update([])
+    r2 = tracker.update([_det(500, 500, 600, 600, conf=0.9)])
+    assert r2[0].track_id != r1[0].track_id
+
+
+def test_appearance_ignores_different_class():
+    tracker = fresh_tracker(min_hits=1, max_age=10, high_threshold=0.6)
+    e = _emb(0)
+    r1 = tracker.update([_det(100, 100, 200, 200, conf=0.9, emb=e, cls_id=0)])
+    tracker.update([])
+    r2 = tracker.update(
+        [_det(500, 500, 600, 600, conf=0.9, emb=e, cls_id=1, name="dog")]
+    )
+    assert r2[0].track_id != r1[0].track_id
+
+
+def test_revived_track_resumes_iou_tracking():
+    """After an appearance revival the Kalman filter restarts at the new
+    position, so plain IoU matching must hold the ID on subsequent frames."""
+    tracker = fresh_tracker(min_hits=1, max_age=10, high_threshold=0.6)
+    e = _emb(0)
+    tid = tracker.update([_det(100, 100, 200, 200, conf=0.9, emb=e)])[0].track_id
+    tracker.update([])
+    tracker.update([_det(500, 500, 600, 600, conf=0.9, emb=e)])
+    r = tracker.update([_det(505, 505, 605, 605, conf=0.9, emb=e)])
+    assert len(r) == 1
+    assert r[0].track_id == tid
 
 
 def test_reset_clears_all_state():
