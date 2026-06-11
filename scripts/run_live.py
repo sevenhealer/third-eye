@@ -79,6 +79,12 @@ def parse_args() -> argparse.Namespace:
                         "one identity enrolled via scripts/enroll.py)")
     p.add_argument("--cpu", action="store_true",
                    help="Force CPU-only inference")
+    p.add_argument("--gpu", type=int, default=None,
+                   help="CUDA device index to use on multi-GPU machines "
+                        "(default: device 0). Sets CUDA_VISIBLE_DEVICES, so "
+                        "torch and onnxruntime both follow. List devices "
+                        "with: nvidia-smi --query-gpu=index,name,"
+                        "pcie.link.width.current --format=csv")
     p.add_argument("--bypass-antispoofing", action="store_true",
                    help="Skip liveness check — DEV MODE ONLY")
     return p.parse_args()
@@ -166,6 +172,12 @@ def _set_minimal_env() -> None:
 
 async def main() -> None:
     args = parse_args()
+
+    # must happen before torch/onnxruntime touch CUDA: the chosen card is
+    # remapped to device 0 for this process, so ctx_id=0 stays correct
+    if args.gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+
     _check_deps()
 
     weights_dir = ROOT / "models" / "weights"
@@ -184,6 +196,8 @@ async def main() -> None:
     from src.ingestion.frame_producer import FrameProducer
 
     ctx_id, inference_label = _detect_inference(force_cpu=args.cpu)
+    if args.gpu is not None and ctx_id == 0:
+        inference_label += f" — physical GPU {args.gpu}"
 
     try:
         source: str | int = int(args.source)

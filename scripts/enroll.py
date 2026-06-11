@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--crops", type=int, default=10,
                    help="Number of face crops to collect (default 10)")
     p.add_argument("--role", default="visitor", help="Person role in DB (default visitor)")
+    p.add_argument("--gpu", type=int, default=None,
+                   help="CUDA device index on multi-GPU machines (sets CUDA_VISIBLE_DEVICES)")
     p.add_argument("--new-person", action="store_true",
                    help="Create a separate person even if the name is already "
                         "enrolled (default: add this embedding to the existing person)")
@@ -86,6 +88,10 @@ def _set_minimal_env() -> None:
 
 async def main() -> None:
     args = parse_args()
+
+    # must happen before torch/onnxruntime touch CUDA
+    if args.gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
     try:
         import cv2
