@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -74,7 +75,7 @@ async def enroll_identity(
     result = await db.execute(
         text("""
             INSERT INTO persons (display_name, role, notes, enrolled_by, metadata)
-            VALUES (:name, :role, :notes, :enrolled_by, :metadata::jsonb)
+            VALUES (:name, :role, :notes, :enrolled_by, CAST(:metadata AS jsonb))
             RETURNING person_id, display_name, role, enrolled_at,
                       is_active, last_seen_at, last_seen_zone, metadata
         """),
@@ -83,7 +84,7 @@ async def enroll_identity(
             "role": body.role,
             "notes": body.notes,
             "enrolled_by": str(current_user.user_id),
-            "metadata": str(body.metadata).replace("'", '"'),
+            "metadata": json.dumps(body.metadata or {}),
         },
     )
     await db.commit()

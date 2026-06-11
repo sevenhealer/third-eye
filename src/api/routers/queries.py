@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from uuid import UUID, uuid4
@@ -78,7 +79,7 @@ async def submit_query(
                  confidence, latency_ms, data_sources)
             VALUES
                 (:qid, :uid, :query, :intent, :answer,
-                 :confidence, :latency, :sources::jsonb)
+                 :confidence, :latency, CAST(:sources AS jsonb))
         """),
         {
             "qid": query_id,
@@ -88,7 +89,7 @@ async def submit_query(
             "answer": result["answer"],
             "confidence": result.get("confidence", 0.0),
             "latency": latency_ms,
-            "sources": str(result.get("data_sources", [])).replace("'", '"'),
+            "sources": json.dumps(result.get("data_sources", [])),
         },
     )
     await db.commit()

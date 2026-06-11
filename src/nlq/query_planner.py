@@ -242,8 +242,8 @@ async def _query_unusual_activity(
                        severity, payload
                 FROM system_events
                 WHERE severity IN ('HIGH','CRITICAL')
-                  AND (:start IS NULL OR event_time >= :start::timestamptz)
-                  AND (:end IS NULL OR event_time <= :end::timestamptz)
+                  AND (:start IS NULL OR event_time >= CAST(:start AS timestamptz))
+                  AND (:end IS NULL OR event_time <= CAST(:end AS timestamptz))
                   AND event_time > now() - INTERVAL '7 days'
                 ORDER BY event_time DESC
                 LIMIT 50
