@@ -73,6 +73,10 @@ def parse_args() -> argparse.Namespace:
                         "phantom detections that also embed too poorly to track.")
     p.add_argument("--show", action="store_true",
                    help="Open a cv2 window (requires opencv-python, not headless)")
+    p.add_argument("--recognize", action="store_true",
+                   help="Match tracked faces against the pgvector gallery and "
+                        "label them by name (needs postgres up and at least "
+                        "one identity enrolled via scripts/enroll.py)")
     p.add_argument("--cpu", action="store_true",
                    help="Force CPU-only inference")
     p.add_argument("--bypass-antispoofing", action="store_true",
@@ -233,6 +237,26 @@ async def main() -> None:
                           low_threshold=det_floor,
                           appearance_threshold=args.reid_thresh)
 
+    # Layer 4 (recognition): track embedding -> pgvector gallery -> name.
+    # Tracking IDs stay anonymous and session-local; the gallery lookup is
+    # what attaches a persistent identity to a track.
+    gallery = None
+    person_names: dict[str, str] = {}
+    track_labels: dict[int, tuple[str, float, int]] = {}  # tid -> (label, sim, frame)
+    if args.recognize:
+        from sqlalchemy import text as sql_text
+
+        from src.core.database import get_db_session
+        from src.face_recognition.gallery import FaceGallery
+        gallery = FaceGallery()
+        async with get_db_session() as session:
+            rows = (await session.execute(sql_text(
+                "SELECT person_id, display_name FROM persons WHERE is_active = true"
+            ))).fetchall()
+        person_names = {str(r[0]): str(r[1]) for r in rows}
+        print(f"Recognition: ON — {len(person_names)} enrolled identity(ies): "
+              f"{', '.join(person_names.values()) or '—'}\n")
+
     camera = CameraReader(source=source)
     if not camera.open():
         print(f"ERROR: Cannot open camera '{source}'")
@@ -267,6 +291,31 @@ async def main() -> None:
         max_fps=args.fps,
         drop_stale=True,  # live source: always process the newest frame
     )
+
+    async def resolve_label(t) -> str:
+        """Gallery lookup with per-track caching: accepted names stick,
+        unknown/ambiguous re-check every 30 frames."""
+        nonlocal gallery
+        if gallery is None or t.embedding is None:
+            return ""
+        label, sim, checked = track_labels.get(t.track_id, ("", 0.0, -999))
+        if label == "" or (label in ("unknown", "?") and frame_count - checked >= 30):
+            try:
+                matches = await gallery.search(t.embedding, top_k=1)
+            except Exception as exc:
+                print(f"  ! recognition disabled — gallery search failed: {exc}")
+                gallery = None
+                return ""
+            if matches and matches[0].decision == "accept":
+                label = person_names.get(matches[0].person_id,
+                                         matches[0].person_id[:8])
+                sim = matches[0].similarity
+            elif matches and matches[0].decision == "ambiguous":
+                label, sim = "?", matches[0].similarity
+            else:
+                label, sim = "unknown", matches[0].similarity if matches else 0.0
+            track_labels[t.track_id] = (label, sim, frame_count)
+        return f"{label} ({sim:.2f})"
 
     async def process_frame(frame, meta) -> None:
         nonlocal frame_count, last_frame_t, last_infer_ms, fps_ema
@@ -329,7 +378,11 @@ async def main() -> None:
             sustained = t.confidence < args.det_thresh
             short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
+            name_txt = await resolve_label(t)
+
             console_extra = f"  hits={t.hits} bank={len(t.embedding_bank)} {short_px}px"
+            if name_txt:
+                console_extra += f"  [{name_txt}]"
             if frames_gone > 3:
                 console_extra += f"  BACK after {frames_gone} frames"
             if sustained:
@@ -348,6 +401,10 @@ async def main() -> None:
                 else:
                     color = (0, 220, 0)      # green: normal high-conf track
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                if name_txt:
+                    cv2.putText(frame, name_txt,
+                                (bbox[0], max(bbox[1] - 46, 14)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
                 label = f"ID:{t.track_id} c={t.confidence:.2f}"
                 sub = f"h{t.hits} b{len(t.embedding_bank)} {short_px}px"
                 if recently_back:

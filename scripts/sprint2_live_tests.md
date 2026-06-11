@@ -323,6 +323,33 @@ all with `has_hash = t`.
 
 ---
 
+## STEP 9 — Live recognition (camera → gallery → name on screen)
+
+End-to-end test of the saved embedding: the live feed labels your track
+with your enrolled name.
+
+```bash
+# Linux GPU box:
+.venv/bin/python scripts/run_live.py --source <rtsp-url> --show --fps 25 --recognize
+# (drop --show on headless OpenCV — names appear in the console lines)
+```
+
+**Expected:**
+- Startup prints `Recognition: ON — 1 enrolled identity(ies): Rohan`
+- Your box gains a white name line: `Rohan (0.55)` — similarity ~0.5–0.8
+  live (it won't be 1.0; that only happens matching a vector to itself)
+- The statue / unenrolled people show `unknown (…)`, below 0.35
+- `? (…)` means ambiguous (0.35–0.45): usually distance/blur — move closer
+- Get a NEW track ID (leave >6 s, come back): the new ID re-resolves to
+  `Rohan` — this is the persistent-identity layer working on top of
+  session-local track IDs
+- Accepted names stick to a track; unknown tracks re-check every ~30 frames
+
+**Pass:** you are named whenever your face is clearly visible; the statue
+is never named.
+
+---
+
 ## Cleanup (optional)
 
 ```bash
@@ -347,3 +374,5 @@ docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c \
 - [ ] Unauthenticated identities request returns 401
 - [ ] Soft delete returns 204 and hides the person from the list
 - [ ] Audit log records `IDENTITY_ENROLLED` / `IDENTITY_SOFT_DELETED` with hashes
+- [ ] Live recognition: `--recognize` labels your live track with your
+      enrolled name (statue/unenrolled stay `unknown`)
