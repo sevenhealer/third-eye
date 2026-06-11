@@ -228,12 +228,28 @@ class ByteTracker:
             t.embedding = _normalize(
                 self.ema_alpha * t.embedding + (1.0 - self.ema_alpha) * emb
             )
-        # bank keeps only *novel* poses — near-duplicates of stored entries
-        # add nothing and would FIFO out the older, genuinely different views
-        if all(float(emb @ b) < 0.95 for b in t.embedding_bank):
+        # the bank is a pose gallery, not a frame history: one slot per
+        # distinct view. Frame-to-frame embeddings of the SAME pose land
+        # around 0.85-0.95 similarity under webcam noise, so near-matches
+        # refresh their slot instead of appending — otherwise the bank fills
+        # with duplicates and FIFO evicts the old poses revival depends on
+        if not t.embedding_bank:
             t.embedding_bank.append(emb)
-            if len(t.embedding_bank) > self.nn_budget:
-                t.embedding_bank.pop(0)
+            return
+        sims = [float(emb @ b) for b in t.embedding_bank]
+        nearest = int(np.argmax(sims))
+        if sims[nearest] >= 0.90:
+            t.embedding_bank[nearest] = emb     # same pose: keep slot fresh
+            return
+        if len(t.embedding_bank) >= self.nn_budget:
+            # full: evict the most redundant stored view (highest similarity
+            # to another slot), never the most distinct one
+            gram = np.array(
+                [[float(a @ b) for b in t.embedding_bank] for a in t.embedding_bank]
+            )
+            np.fill_diagonal(gram, -1.0)
+            t.embedding_bank.pop(int(gram.max(axis=1).argmax()))
+        t.embedding_bank.append(emb)
 
     @staticmethod
     def _appearance_sim(t: TrackedObject, d_emb: np.ndarray) -> float:
@@ -300,14 +316,14 @@ class ByteTracker:
 
         matches, unmatched_rows, _ = hungarian_match(sim, self.appearance_threshold)
 
-        # a near-miss here becomes a brand-new ID — log the best score so a
-        # too-strict appearance_threshold is visible in the live output
+        # a miss here becomes a brand-new ID — always log the best score so
+        # failed revivals are never silent (low scores matter most: they
+        # show the bank held no view resembling the returning face)
         for r in unmatched_rows:
-            best = float(sim[r].max())
-            if best > 0.2:
+            if sim[r].size:
                 logger.info(
                     "reid_revival_missed",
-                    best_similarity=round(best, 3),
+                    best_similarity=round(float(sim[r].max()), 3),
                     threshold=self.appearance_threshold,
                 )
 

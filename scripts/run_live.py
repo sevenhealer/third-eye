@@ -215,7 +215,7 @@ async def main() -> None:
     # script — statues, photos and screens WILL be boxed and tracked here
     print(f"  anti-spoofing   : "
           f"{'BYPASSED — dev mode' if args.bypass_antispoofing else 'n/a in this script (FacePipeline layer, later step)'}")
-    print("=" * 62)
+    print("=" * 62) 
     print("\nPress Ctrl+C to stop.\n")
 
     from src.object_detection.detector import ObjectDetection

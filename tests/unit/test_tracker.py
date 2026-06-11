@@ -215,6 +215,23 @@ def test_embedding_bank_revives_on_old_pose():
     assert r[0].track_id == tid
 
 
+def test_embedding_bank_stores_poses_not_frames():
+    """Frame-to-frame noise on the same pose must refresh one slot, not
+    append 30 duplicates and evict the older poses revival depends on."""
+    tracker = fresh_tracker(min_hits=1, high_threshold=0.6)
+    base = _emb(0)
+    rng = np.random.default_rng(0)
+    tracker.update([_det(conf=0.9, emb=base)])
+    for _ in range(50):
+        noisy = (base + rng.normal(0, 0.01, base.shape)).astype("float32")
+        tracker.update([_det(conf=0.9, emb=noisy)])
+    track = next(iter(tracker._tracks.values()))
+    assert len(track.embedding_bank) == 1
+    # a genuinely different view takes a second slot
+    tracker.update([_det(conf=0.9, emb=_emb(1))])
+    assert len(track.embedding_bank) == 2
+
+
 def test_revived_track_resumes_iou_tracking():
     """After an appearance revival the Kalman filter restarts at the new
     position, so plain IoU matching must hold the ID on subsequent frames."""

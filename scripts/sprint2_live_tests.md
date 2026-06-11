@@ -108,22 +108,65 @@ ls models/weights/models/buffalo_l/
 ## STEP 3 — Live face detection + tracking (webcam)
 
 ```bash
+# Mac webcam:
 .venv/bin/python scripts/run_live.py --source 0 --show
+# Linux GPU box (set --fps to what the camera actually delivers):
+.venv/bin/python scripts/run_live.py --source <rtsp-url-or-0> --show --fps 25
 ```
 
 > First run on macOS: grant camera access to Terminal/IDE under
 > System Settings → Privacy & Security → Camera.
+> Linux with `opencv-python-headless`: drop `--show` — the console lines
+> carry the same per-track fields as the overlay.
+
+Useful flags: `--det-thresh` (default 0.6 — confidence to *start* a track;
+the detector floor is 0.30 and that band only *sustains* existing tracks),
+`--min-face` (default 24 px — drops smaller boxes), `--reid-thresh`
+(default 0.45 — embedding similarity to give a returning face its old ID
+back; tune toward 0.40 if revivals miss, never below 0.35), `--det-size 640`
+(halves inference cost on bandwidth-starved GPUs, e.g. PCIe x1 risers).
 
 **Expected:**
-- Banner shows `platform : Darwin arm64` and `inference : CPU + CoreML (Apple Neural Engine)`
-  (Linux: `GPU (CUDA)`)
-- A window opens with a green box and stable `ID:1` label around your face
+- Banner shows `platform`/`inference` for the machine (Mac: `CPU + CoreML`,
+  Linux: `GPU (CUDA)` — if Linux says CPU, fix the CUDA install first) and
+  `det thresh : 0.6 (start track) / 0.3 (sustain floor)`
+- HUD top-left: `fps … infer …ms det … trk … ids … frame …`.
+  Sanity on the 3090: `infer` ≈ 10–40 ms at det-size 960 on x16 (~60–80 ms
+  on a PCIe x1 link, which caps fps near 12 — use `--det-size 640` there)
+- A box with two-line label around your face:
+  `ID:1 c=0.86` / `h42 b3 87px` (hits, stored pose views, box short side).
+  GREEN = high-conf tracked, YELLOW = sustained by a low-conf detection
+  (normal during blur/dim moments), ORANGE + `back+Nf` = returned after a
+  gap (coast or ReID revival)
 - Terminal prints one line per tracked frame:
   ```
-  [cam0 | frame    42]  track=  1  bbox=[ 512, 203, 781, 540]  conf=0.857
+  [cam0 | frame    42]  track=  1  bbox=[ 512, 203, 781, 540]  conf=0.857  hits=42 bank=3 87px
   ```
-- Track ID stays the same while you stay in frame; a second person gets a new ID
-- Press `q` (or Ctrl+C) to stop → summary line `Stopped — N frames, 1 unique person ID(s).`
+- `b`/`bank` starts at 1 and grows slowly (~2–8) as you show new head
+  poses; a constantly-full bank (`b30`) is a bug — report it
+- Track ID stays the same while you stay in frame — including fast
+  movement and brief blur; a second person gets a new ID
+- Walk out and return facing the camera within ~6 s: box comes back
+  ORANGE with your old ID and the log shows
+  `track_revived track_id=… similarity=…`. If instead you see
+  `reid_revival_missed best_similarity=0.36–0.44`, rerun with
+  `--reid-thresh 0.40` and it should revive
+- `! feed stall … — camera/stream` lines are the source hiccuping
+  (RTSP jitter / auto-exposure in the dark) and are fine occasionally;
+  `— processing (inference slow)` on the GPU box is a failure — investigate
+- Press `q` (or Ctrl+C) to stop → summary line `Stopped — N frames, …`
+
+**Expected misses — do NOT count these as failures:**
+- A statue/photo/poster face gets a box and an ID: correct at this layer —
+  it must hold ONE stable ID; liveness rejection is FacePipeline's
+  anti-spoofing (later step), not the detector's job
+- New ID after a full body rotation, springing up from bed, or returning
+  after >6 s / facing away: face-only tracking limits — body ReID
+  (StrongSORT + OSNet) and gallery identity arrive in Sprint 6
+- ID numbers climbing with gaps (7, 13, …): IDs are a never-reused counter;
+  the values carry no meaning
+- Box blinking off for a few frames and returning with the same ID
+  (coasting through missed detections)
 
 ---
 
