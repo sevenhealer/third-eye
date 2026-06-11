@@ -346,16 +346,19 @@ async def main() -> None:
                 label, misses = new_name, 0
                 at_risk.pop(t.track_id, None)   # verified: track is clean again
             elif named:
-                if at_risk.get(t.track_id):
-                    misses += 1
-                    if misses >= 2:
-                        print(f"  ! track {t.track_id} failed re-verification "
-                              f"after a risk event — {label} demoted to unknown")
-                        label, sim, misses = "unknown", (m.similarity if m else 0.0), 0
-                else:
-                    # continuous low-risk track: the name rides the track;
-                    # a weak face view doesn't update sim and doesn't count
-                    misses = 0
+                # two-tier demotion: failures only count on good views (the
+                # gate above), so these are clear faces NOT matching the name.
+                # At-risk tracks (gap/crossing) demote fast; low-risk tracks
+                # demote slowly — the safety net for swaps the risk detectors
+                # missed (sub-threshold crossings, detector flicker)
+                misses += 1
+                limit = 2 if at_risk.get(t.track_id) else 4
+                if misses >= limit:
+                    why = ("risk event" if at_risk.get(t.track_id)
+                           else f"{limit} clear views failed to verify")
+                    print(f"  ! track {t.track_id} demoted: {label} -> unknown ({why})")
+                    label, sim, misses = "unknown", (m.similarity if m else 0.0), 0
+                    at_risk.pop(t.track_id, None)
             else:
                 label = "?" if (m is not None and m.decision == "ambiguous") else "unknown"
                 sim, misses = (m.similarity if m else 0.0), 0

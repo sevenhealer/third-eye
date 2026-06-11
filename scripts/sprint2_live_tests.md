@@ -349,10 +349,11 @@ with your enrolled name.
 - Your name PERSISTS while your track is continuous, even with your face
   turned away or blurred — identity belongs to the track, and weak views
   neither update the similarity nor count against the name
-- Demotion to `unknown` happens only after a RISK event (track returned
-  from a gap, or two people's boxes crossed) followed by 2 failed
-  re-checks — that contamination guard is expected behavior, with a
-  console line explaining it
+- Demotion to `unknown` is two-tier and only ever counts failures on
+  CLEAR views: after a risk event (gap return / boxes crossing) 2 failed
+  re-checks suffice (~2-4 s); with no risk event it takes 4 consecutive
+  clear-view failures (~8+ s safety net for undetected swaps). Turned-away
+  or blurred faces never count toward demotion
 
 **Pass:** you are named whenever your face is clearly visible; the statue
 is never named.
