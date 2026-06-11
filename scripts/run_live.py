@@ -237,7 +237,7 @@ async def main() -> None:
     print("\nPress Ctrl+C to stop.\n")
 
     from src.object_detection.detector import ObjectDetection
-    from src.tracking.tracker import ByteTracker
+    from src.tracking.tracker import ByteTracker, iou
 
     # iou_threshold 0.2: face boxes are small, so even one frame of brisk
     # movement costs a lot of relative overlap; 0.3 splits tracks on it.
@@ -259,6 +259,10 @@ async def main() -> None:
     # tid -> (label, sim_ema, frame_last_checked, consecutive_misses)
     track_labels: dict[int, tuple[str, float, int, int]] = {}
     RECHECK_FRAMES = 30   # ~2s at 15fps: live-updating identity without per-frame DB load
+    # Identity is assigned to the TRACK, so a name persists through turned-away
+    # faces and blur. It can only be questioned after an event that could have
+    # swapped the track's owner: a return from a gap, or two boxes crossing.
+    at_risk: dict[int, bool] = {}
     if args.recognize:
         from sqlalchemy import text as sql_text
 
@@ -308,18 +312,23 @@ async def main() -> None:
         drop_stale=True,  # live source: always process the newest frame
     )
 
-    async def resolve_label(t, force: bool = False) -> str:
-        """Continuous identity verification (production pattern): every track
-        — including accepted ones — is re-checked each RECHECK_FRAMES, the
-        shown similarity is an EMA over checks, and a name is only demoted
-        after 2 consecutive failed checks (hysteresis). `force` re-checks
-        immediately, used when a track returns from a gap — the moment an
-        ID-swap/contamination is most likely."""
+    async def resolve_label(t, force: bool = False, good_view: bool = True) -> str:
+        """Track-level identity (production pattern): a name belongs to the
+        track and persists through turned-away faces and blur — low
+        similarity on a continuous track is absence of evidence, not
+        evidence of absence. Demotion requires BOTH a risk event (gap
+        return / box crossing, tracked in `at_risk`) AND 2 consecutive
+        failed re-checks. Re-verification of a named track only runs on
+        good views (high-conf, big-enough face) so garbage frames can't
+        strip a name. A different person matching with `accept` always
+        relabels (logged)."""
         nonlocal gallery
         if gallery is None or t.embedding is None:
             return ""
         label, sim, checked, misses = track_labels.get(t.track_id, ("", 0.0, -999, 0))
-        if label == "" or force or frame_count - checked >= RECHECK_FRAMES:
+        named = label not in ("", "unknown", "?")
+        due = label == "" or force or frame_count - checked >= RECHECK_FRAMES
+        if due and (good_view or not named):
             try:
                 matches = await gallery.search(t.embedding, top_k=1)
             except Exception as exc:
@@ -327,7 +336,6 @@ async def main() -> None:
                 gallery = None
                 return ""
             m = matches[0] if matches else None
-            named = label not in ("", "unknown", "?")
             if m is not None and m.decision == "accept":
                 new_name = person_names.get(m.person_id, m.person_id[:8])
                 if named and new_name != label:
@@ -336,13 +344,18 @@ async def main() -> None:
                 sim = m.similarity if (not named or new_name != label) \
                     else 0.7 * sim + 0.3 * m.similarity
                 label, misses = new_name, 0
+                at_risk.pop(t.track_id, None)   # verified: track is clean again
             elif named:
-                # hysteresis: one bad check (blur, profile) doesn't strip a name
-                misses += 1
-                if misses >= 2:
-                    print(f"  ! track {t.track_id} no longer verifies as {label} "
-                          f"— demoted to unknown")
-                    label, sim, misses = "unknown", (m.similarity if m else 0.0), 0
+                if at_risk.get(t.track_id):
+                    misses += 1
+                    if misses >= 2:
+                        print(f"  ! track {t.track_id} failed re-verification "
+                              f"after a risk event — {label} demoted to unknown")
+                        label, sim, misses = "unknown", (m.similarity if m else 0.0), 0
+                else:
+                    # continuous low-risk track: the name rides the track;
+                    # a weak face view doesn't update sim and doesn't count
+                    misses = 0
             else:
                 label = "?" if (m is not None and m.decision == "ambiguous") else "unknown"
                 sim, misses = (m.similarity if m else 0.0), 0
@@ -396,6 +409,14 @@ async def main() -> None:
         for t in tracked:
             unique_ids.add(t.track_id)
 
+        # crossing boxes can swap track IDs — flag both for re-verification
+        if gallery is not None:
+            for i in range(len(tracked)):
+                for j in range(i + 1, len(tracked)):
+                    if iou(tracked[i].bbox, tracked[j].bbox) > 0.2:
+                        at_risk[tracked[i].track_id] = True
+                        at_risk[tracked[j].track_id] = True
+
         for t in tracked:
             bbox = t.bbox.astype(int)
 
@@ -410,9 +431,15 @@ async def main() -> None:
             sustained = t.confidence < args.det_thresh
             short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
-            # a return-from-gap is the highest-risk moment for a wrong sticky
-            # label — re-verify identity immediately
-            name_txt = await resolve_label(t, force=frames_gone > 3)
+            # a return-from-gap could be a different person on the same ID —
+            # flag the track and re-verify immediately
+            if frames_gone > 3:
+                at_risk[t.track_id] = True
+            name_txt = await resolve_label(
+                t,
+                force=frames_gone > 3,
+                good_view=(not sustained) and short_px >= 32,
+            )
 
             console_extra = f"  hits={t.hits} bank={len(t.embedding_bank)} {short_px}px"
             if name_txt:

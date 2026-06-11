@@ -346,9 +346,13 @@ with your enrolled name.
 - The similarity number updates every ~30 frames (continuous
   re-verification, EMA-smoothed) — it should wander a little (pose/light),
   not freeze
-- A named track that stops verifying (2 consecutive failed re-checks,
-  e.g. after a track swap) is demoted to `unknown` with a console line —
-  this contamination guard is expected behavior, not a bug
+- Your name PERSISTS while your track is continuous, even with your face
+  turned away or blurred — identity belongs to the track, and weak views
+  neither update the similarity nor count against the name
+- Demotion to `unknown` happens only after a RISK event (track returned
+  from a gap, or two people's boxes crossed) followed by 2 failed
+  re-checks — that contamination guard is expected behavior, with a
+  console line explaining it
 
 **Pass:** you are named whenever your face is clearly visible; the statue
 is never named.
