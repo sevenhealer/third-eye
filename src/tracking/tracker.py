@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from src.core.logging import get_logger
 from src.object_detection.detector import ObjectDetection
+
+logger = get_logger(__name__)
 
 try:
     from scipy.optimize import linear_sum_assignment as _lsa
@@ -295,11 +298,28 @@ class ByteTracker:
                 if t.class_id == high[det_i].class_id:
                     sim[r, c] = self._appearance_sim(t, d_emb)
 
-        matches, _, _ = hungarian_match(sim, self.appearance_threshold)
+        matches, unmatched_rows, _ = hungarian_match(sim, self.appearance_threshold)
+
+        # a near-miss here becomes a brand-new ID — log the best score so a
+        # too-strict appearance_threshold is visible in the live output
+        for r in unmatched_rows:
+            best = float(sim[r].max())
+            if best > 0.2:
+                logger.info(
+                    "reid_revival_missed",
+                    best_similarity=round(best, 3),
+                    threshold=self.appearance_threshold,
+                )
+
         revived: set[int] = set()
         for r, c in matches:
             det_i, tid = cand[r], track_ids[c]
             det = high[det_i]
+            logger.info(
+                "track_revived",
+                track_id=tid,
+                similarity=round(float(sim[r, c]), 3),
+            )
             # motion state is stale after the gap — restart the filter at the
             # new position instead of dragging the old velocity across the jump
             self._kalman[tid] = KalmanBoxTracker(det.bbox)

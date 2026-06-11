@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
                         "tracks through confidence dips (ByteTrack), never "
                         "create new ones. Raise to suppress low-light false "
                         "faces, lower if real faces are never picked up.")
+    p.add_argument("--reid-thresh", type=float, default=0.45,
+                   help="Embedding similarity needed to give a returning face "
+                        "its old ID back (default 0.45). Lower toward 0.38 if "
+                        "you re-enter and get a new ID (watch for "
+                        "reid_revival_missed log lines); don't go below "
+                        "0.35 — that's the different-person boundary.")
     p.add_argument("--min-face", type=int, default=24,
                    help="Discard face boxes smaller than this many pixels on "
                         "their short side (default 24). Filters tiny low-light "
@@ -225,7 +231,7 @@ async def main() -> None:
     tracker = ByteTracker(max_age=90, min_hits=3, iou_threshold=0.2,
                           high_threshold=args.det_thresh,
                           low_threshold=det_floor,
-                          appearance_threshold=0.45)
+                          appearance_threshold=args.reid_thresh)
 
     camera = CameraReader(source=source)
     if not camera.open():
@@ -245,6 +251,15 @@ async def main() -> None:
     unique_ids: set[int] = set()
     last_frame_t = 0.0
     last_infer_ms = 0.0
+    fps_ema = 0.0
+    last_drawn: dict[int, int] = {}    # track_id -> frame when last emitted
+    came_back: dict[int, tuple[int, int]] = {}   # track_id -> (frame returned, frames gone)
+
+    if args.show:
+        print("Overlay: GREEN tracked | YELLOW sustained by low-conf det "
+              "| ORANGE returned after gap (revival/coast)")
+        print("Label:   ID:n c=det-confidence | h hits, b stored views, "
+              "px box short side, back+Nf frames it was gone\n")
     producer = FrameProducer(
         camera=camera,
         camera_id=args.camera_id,
@@ -254,7 +269,7 @@ async def main() -> None:
     )
 
     async def process_frame(frame, meta) -> None:
-        nonlocal frame_count, last_frame_t, last_infer_ms
+        nonlocal frame_count, last_frame_t, last_infer_ms, fps_ema
         frame_count += 1
 
         now = time.monotonic()
@@ -271,6 +286,9 @@ async def main() -> None:
                 f"  ! feed stall {gap * 1000:.0f} ms "
                 f"(last inference {last_infer_ms:.0f} ms) — {cause}"
             )
+        if last_frame_t:
+            inst_fps = 1.0 / max(gap, 1e-6)
+            fps_ema = inst_fps if fps_ema == 0.0 else 0.9 * fps_ema + 0.1 * inst_fps
         last_frame_t = now
 
         t_inf = time.monotonic()
@@ -299,24 +317,63 @@ async def main() -> None:
 
         for t in tracked:
             bbox = t.bbox.astype(int)
+
+            # gap > 3 frames means the box was coasting or revived — flag it
+            frames_gone = frame_count - last_drawn.get(t.track_id, frame_count)
+            last_drawn[t.track_id] = frame_count
+            if frames_gone > 3:
+                came_back[t.track_id] = (frame_count, frames_gone)
+            back_frame, back_gap = came_back.get(t.track_id, (-999, 0))
+            recently_back = frame_count - back_frame < 20
+
+            sustained = t.confidence < args.det_thresh
+            short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+
+            console_extra = f"  hits={t.hits} bank={len(t.embedding_bank)} {short_px}px"
+            if frames_gone > 3:
+                console_extra += f"  BACK after {frames_gone} frames"
+            if sustained:
+                console_extra += "  (low-conf sustain)"
             print(
                 f"[{meta.camera_id} | frame {meta.frame_id:>5}]  "
                 f"track={t.track_id:>3}  "
                 f"bbox=[{bbox[0]:4},{bbox[1]:4},{bbox[2]:4},{bbox[3]:4}]  "
-                f"conf={t.confidence:.3f}"
+                f"conf={t.confidence:.3f}{console_extra}"
             )
             if args.show:
-                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 0), 2)
-                cv2.putText(
-                    frame, f"ID:{t.track_id}",
-                    (bbox[0], max(bbox[1] - 8, 0)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 0), 2,
-                )
+                if recently_back:
+                    color = (0, 165, 255)    # orange: returned after a gap
+                elif sustained:
+                    color = (0, 220, 220)    # yellow: alive on low-conf dets
+                else:
+                    color = (0, 220, 0)      # green: normal high-conf track
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                label = f"ID:{t.track_id} c={t.confidence:.2f}"
+                sub = f"h{t.hits} b{len(t.embedding_bank)} {short_px}px"
+                if recently_back:
+                    sub += f" back+{back_gap}f"
+                cv2.putText(frame, label,
+                            (bbox[0], max(bbox[1] - 26, 14)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                cv2.putText(frame, sub,
+                            (bbox[0], max(bbox[1] - 8, 30)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
 
         if args.show:
+            hud = (
+                f"fps {fps_ema:4.1f}  infer {last_infer_ms:3.0f}ms  "
+                f"det {len(raw_faces)}  trk {len(tracked)}  "
+                f"ids {len(unique_ids)}  frame {frame_count}"
+            )
+            # dark outline + light fill keeps the HUD readable on any scene
+            cv2.putText(frame, hud, (10, 26),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+            cv2.putText(frame, hud, (10, 26),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 1)
+
             # downscale for display: cheaper to draw and fits the monitor
             h, w = frame.shape[:2]
             scale = min(1600 / w, 900 / h, 1.0)
