@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -151,6 +151,10 @@ class TrackedObject:
     time_since_update: int = 0
     state: str = "tentative"   # tentative | confirmed | deleted
     embedding: np.ndarray | None = None   # EMA appearance embedding, L2-normalized
+    # bank of distinct past embeddings (poses); re-association matches the
+    # best of these, so one frontal sighting can revive a track that was
+    # last seen in profile or motion-blurred
+    embedding_bank: list[np.ndarray] = field(default_factory=list)
 
 
 # ── ByteTracker ───────────────────────────────────────────────────────────────
@@ -181,6 +185,7 @@ class ByteTracker:
         low_threshold: float = 0.1,
         appearance_threshold: float = 0.45,
         ema_alpha: float = 0.9,
+        nn_budget: int = 30,
     ) -> None:
         self.max_age = max_age
         self.min_hits = min_hits
@@ -189,6 +194,7 @@ class ByteTracker:
         self.low_threshold = low_threshold
         self.appearance_threshold = appearance_threshold
         self.ema_alpha = ema_alpha
+        self.nn_budget = nn_budget
         self._kalman: dict[int, KalmanBoxTracker] = {}
         self._tracks: dict[int, TrackedObject] = {}
 
@@ -204,8 +210,9 @@ class ByteTracker:
             class_id=det.class_id,
             class_name=det.class_name,
             confidence=det.confidence,
-            embedding=_normalize(det.embedding) if det.embedding is not None else None,
         )
+        if det.embedding is not None:
+            self._update_embedding(t, det.embedding)
         if t.hits >= self.min_hits:
             t.state = "confirmed"
         return t
@@ -218,6 +225,21 @@ class ByteTracker:
             t.embedding = _normalize(
                 self.ema_alpha * t.embedding + (1.0 - self.ema_alpha) * emb
             )
+        # bank keeps only *novel* poses — near-duplicates of stored entries
+        # add nothing and would FIFO out the older, genuinely different views
+        if all(float(emb @ b) < 0.95 for b in t.embedding_bank):
+            t.embedding_bank.append(emb)
+            if len(t.embedding_bank) > self.nn_budget:
+                t.embedding_bank.pop(0)
+
+    @staticmethod
+    def _appearance_sim(t: TrackedObject, d_emb: np.ndarray) -> float:
+        """Best cosine similarity between a detection embedding and any stored
+        view of the track (DeepSORT-style nearest-neighbor over the bank)."""
+        sims = [float(d_emb @ b) for b in t.embedding_bank]
+        if t.embedding is not None:
+            sims.append(float(d_emb @ t.embedding))
+        return max(sims) if sims else 0.0
 
     def _match_and_update(
         self,
@@ -271,7 +293,7 @@ class ByteTracker:
             for c, tid in enumerate(track_ids):
                 t = self._tracks[tid]
                 if t.class_id == high[det_i].class_id:
-                    sim[r, c] = float(d_emb @ t.embedding)
+                    sim[r, c] = self._appearance_sim(t, d_emb)
 
         matches, _, _ = hungarian_match(sim, self.appearance_threshold)
         revived: set[int] = set()

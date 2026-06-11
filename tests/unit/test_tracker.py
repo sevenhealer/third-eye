@@ -198,6 +198,23 @@ def test_appearance_ignores_different_class():
     assert r2[0].track_id != r1[0].track_id
 
 
+def test_embedding_bank_revives_on_old_pose():
+    """A track seen frontal once, then in profile for many frames: the EMA
+    embedding drifts to the profile view, but the bank still holds the
+    frontal one — re-entry with the frontal face must revive the ID."""
+    tracker = fresh_tracker(min_hits=1, max_age=60, high_threshold=0.6)
+    frontal, profile = _emb(0), _emb(1)
+    tid = tracker.update([_det(conf=0.9, emb=frontal)])[0].track_id
+    for _ in range(20):
+        tracker.update([_det(conf=0.9, emb=profile)])
+    # sanity: EMA alone is now too far from the frontal view to clear 0.45
+    track = next(iter(tracker._tracks.values()))
+    assert float(frontal @ track.embedding) < tracker.appearance_threshold
+    tracker.update([])   # gap
+    r = tracker.update([_det(500, 500, 600, 600, conf=0.9, emb=frontal)])
+    assert r[0].track_id == tid
+
+
 def test_revived_track_resumes_iou_tracking():
     """After an appearance revival the Kalman filter restarts at the new
     position, so plain IoU matching must hold the ID on subsequent frames."""

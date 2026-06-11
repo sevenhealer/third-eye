@@ -30,6 +30,7 @@ import asyncio
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,10 +55,12 @@ def parse_args() -> argparse.Namespace:
                         "on CPU). Larger finds small/distant faces on "
                         "high-res streams at some speed cost.")
     p.add_argument("--det-thresh", type=float, default=0.6,
-                   help="Face detection confidence threshold (default 0.6; "
-                        "insightface default is 0.5). Raise to suppress "
-                        "low-light false faces on furniture/dark corners, "
-                        "lower if real faces in dim areas are missed.")
+                   help="Confidence needed to START a track (default 0.6). "
+                        "The detector itself runs at a 0.30 floor: detections "
+                        "in [0.30, det-thresh) only sustain already-started "
+                        "tracks through confidence dips (ByteTrack), never "
+                        "create new ones. Raise to suppress low-light false "
+                        "faces, lower if real faces are never picked up.")
     p.add_argument("--min-face", type=int, default=24,
                    help="Discard face boxes smaller than this many pixels on "
                         "their short side (default 24). Filters tiny low-light "
@@ -180,9 +183,15 @@ async def main() -> None:
     det_size = args.det_size or (960 if ctx_id == 0 else 640)
 
     print("Loading models ...", end=" ", flush=True)
+    # detector floor sits well below --det-thresh so the tracker still sees
+    # low-confidence detections: ByteTrack stage 2 uses them to hold existing
+    # tracks through dips (statue/borderline faces, motion blur) while only
+    # >= det-thresh detections may start a new track
+    det_floor = min(0.30, args.det_thresh)
+
     app = FaceAnalysis(name="buffalo_l", root=str(weights_dir))
     app.prepare(ctx_id=ctx_id, det_size=(det_size, det_size),
-                det_thresh=args.det_thresh)
+                det_thresh=det_floor)
     print("OK\n")
 
     print("=" * 62)
@@ -192,11 +201,14 @@ async def main() -> None:
     print(f"  zone-id         : {args.zone_id}")
     print(f"  fps target      : {args.fps}")
     print(f"  det size        : {det_size}x{det_size}")
-    print(f"  det thresh      : {args.det_thresh}")
+    print(f"  det thresh      : {args.det_thresh} (start track) / {det_floor} (sustain floor)")
     print(f"  min face px     : {args.min_face}")
     print(f"  inference       : {inference_label}")
     print(f"  display window  : {'yes  (press q to quit)' if args.show else 'no'}")
-    print(f"  anti-spoofing   : {'BYPASSED — dev mode' if args.bypass_antispoofing else 'enabled'}")
+    # liveness runs in FacePipeline (layer 3), not in this detect+track
+    # script — statues, photos and screens WILL be boxed and tracked here
+    print(f"  anti-spoofing   : "
+          f"{'BYPASSED — dev mode' if args.bypass_antispoofing else 'n/a in this script (FacePipeline layer, later step)'}")
     print("=" * 62)
     print("\nPress Ctrl+C to stop.\n")
 
@@ -211,7 +223,8 @@ async def main() -> None:
     # appearance_threshold 0.45 matches face_match_accept_threshold — below
     # that, wrongly merging two people is worse than a fresh ID.
     tracker = ByteTracker(max_age=90, min_hits=3, iou_threshold=0.2,
-                          high_threshold=0.5, low_threshold=0.1,
+                          high_threshold=args.det_thresh,
+                          low_threshold=det_floor,
                           appearance_threshold=0.45)
 
     camera = CameraReader(source=source)
@@ -230,6 +243,8 @@ async def main() -> None:
 
     frame_count = 0
     unique_ids: set[int] = set()
+    last_frame_t = 0.0
+    last_infer_ms = 0.0
     producer = FrameProducer(
         camera=camera,
         camera_id=args.camera_id,
@@ -239,10 +254,28 @@ async def main() -> None:
     )
 
     async def process_frame(frame, meta) -> None:
-        nonlocal frame_count
+        nonlocal frame_count, last_frame_t, last_infer_ms
         frame_count += 1
 
+        now = time.monotonic()
+        # tell camera stalls apart from slow inference: if the gap dwarfs the
+        # last inference time, the source delivered nothing during it
+        gap = now - last_frame_t
+        if last_frame_t and gap > 0.3:
+            cause = (
+                "processing (inference slow)"
+                if last_infer_ms / 1000.0 > gap * 0.7
+                else "camera/stream (no frames arrived)"
+            )
+            print(
+                f"  ! feed stall {gap * 1000:.0f} ms "
+                f"(last inference {last_infer_ms:.0f} ms) — {cause}"
+            )
+        last_frame_t = now
+
+        t_inf = time.monotonic()
         raw_faces = app.get(frame)
+        last_infer_ms = (time.monotonic() - t_inf) * 1000.0
 
         # Wrap insightface detections as ObjectDetection for ByteTracker
         dets: list[ObjectDetection] = []
