@@ -343,7 +343,12 @@ with your enrolled name.
 - Get a NEW track ID (leave >6 s, come back): the new ID re-resolves to
   `Rohan` — this is the persistent-identity layer working on top of
   session-local track IDs
-- Accepted names stick to a track; unknown tracks re-check every ~30 frames
+- The similarity number updates every ~30 frames (continuous
+  re-verification, EMA-smoothed) — it should wander a little (pose/light),
+  not freeze
+- A named track that stops verifying (2 consecutive failed re-checks,
+  e.g. after a track swap) is demoted to `unknown` with a console line —
+  this contamination guard is expected behavior, not a bug
 
 **Pass:** you are named whenever your face is clearly visible; the statue
 is never named.

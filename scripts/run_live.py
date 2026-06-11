@@ -242,7 +242,9 @@ async def main() -> None:
     # what attaches a persistent identity to a track.
     gallery = None
     person_names: dict[str, str] = {}
-    track_labels: dict[int, tuple[str, float, int]] = {}  # tid -> (label, sim, frame)
+    # tid -> (label, sim_ema, frame_last_checked, consecutive_misses)
+    track_labels: dict[int, tuple[str, float, int, int]] = {}
+    RECHECK_FRAMES = 30   # ~2s at 15fps: live-updating identity without per-frame DB load
     if args.recognize:
         from sqlalchemy import text as sql_text
 
@@ -292,29 +294,45 @@ async def main() -> None:
         drop_stale=True,  # live source: always process the newest frame
     )
 
-    async def resolve_label(t) -> str:
-        """Gallery lookup with per-track caching: accepted names stick,
-        unknown/ambiguous re-check every 30 frames."""
+    async def resolve_label(t, force: bool = False) -> str:
+        """Continuous identity verification (production pattern): every track
+        — including accepted ones — is re-checked each RECHECK_FRAMES, the
+        shown similarity is an EMA over checks, and a name is only demoted
+        after 2 consecutive failed checks (hysteresis). `force` re-checks
+        immediately, used when a track returns from a gap — the moment an
+        ID-swap/contamination is most likely."""
         nonlocal gallery
         if gallery is None or t.embedding is None:
             return ""
-        label, sim, checked = track_labels.get(t.track_id, ("", 0.0, -999))
-        if label == "" or (label in ("unknown", "?") and frame_count - checked >= 30):
+        label, sim, checked, misses = track_labels.get(t.track_id, ("", 0.0, -999, 0))
+        if label == "" or force or frame_count - checked >= RECHECK_FRAMES:
             try:
                 matches = await gallery.search(t.embedding, top_k=1)
             except Exception as exc:
                 print(f"  ! recognition disabled — gallery search failed: {exc}")
                 gallery = None
                 return ""
-            if matches and matches[0].decision == "accept":
-                label = person_names.get(matches[0].person_id,
-                                         matches[0].person_id[:8])
-                sim = matches[0].similarity
-            elif matches and matches[0].decision == "ambiguous":
-                label, sim = "?", matches[0].similarity
+            m = matches[0] if matches else None
+            named = label not in ("", "unknown", "?")
+            if m is not None and m.decision == "accept":
+                new_name = person_names.get(m.person_id, m.person_id[:8])
+                if named and new_name != label:
+                    print(f"  ! track {t.track_id} relabeled {label} -> {new_name} "
+                          f"(sim {m.similarity:.2f})")
+                sim = m.similarity if (not named or new_name != label) \
+                    else 0.7 * sim + 0.3 * m.similarity
+                label, misses = new_name, 0
+            elif named:
+                # hysteresis: one bad check (blur, profile) doesn't strip a name
+                misses += 1
+                if misses >= 2:
+                    print(f"  ! track {t.track_id} no longer verifies as {label} "
+                          f"— demoted to unknown")
+                    label, sim, misses = "unknown", (m.similarity if m else 0.0), 0
             else:
-                label, sim = "unknown", matches[0].similarity if matches else 0.0
-            track_labels[t.track_id] = (label, sim, frame_count)
+                label = "?" if (m is not None and m.decision == "ambiguous") else "unknown"
+                sim, misses = (m.similarity if m else 0.0), 0
+            track_labels[t.track_id] = (label, sim, frame_count, misses)
         return f"{label} ({sim:.2f})"
 
     async def process_frame(frame, meta) -> None:
@@ -378,7 +396,9 @@ async def main() -> None:
             sustained = t.confidence < args.det_thresh
             short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
-            name_txt = await resolve_label(t)
+            # a return-from-gap is the highest-risk moment for a wrong sticky
+            # label — re-verify identity immediately
+            name_txt = await resolve_label(t, force=frames_gone > 3)
 
             console_extra = f"  hits={t.hits} bank={len(t.embedding_bank)} {short_px}px"
             if name_txt:
