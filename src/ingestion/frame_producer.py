@@ -136,6 +136,12 @@ class FrameProducer:
             await self._emit(frame, callback)
             await self._throttle(t0)
 
+        # let the grabber finish its in-flight read before the caller
+        # releases the camera — closing the container under a live read
+        # stalls shutdown (and can crash PyAV)
+        self._running = False
+        grabber.join(timeout=2.0)
+
     def _grab_loop(self) -> None:
         while self._running:
             ok, frame = self.camera.read_frame()
