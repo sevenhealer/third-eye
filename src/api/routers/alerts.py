@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -130,3 +138,47 @@ async def resolve_alert(
         resource_id=str(alert_id),
     )
     return {"message": "Alert resolved."}
+
+
+@router.websocket("/ws")
+async def alerts_ws(websocket: WebSocket) -> None:
+    """
+    Live alert stream. Authenticate with ?token=<access-token> (browsers
+    cannot set Authorization headers on WebSocket connects). Relays the
+    redis channel the pipeline's AlertDelivery publishes to.
+    """
+    import jwt as _jwt
+
+    from src.alerts.delivery import ALERT_CHANNEL
+    from src.core.config import get_settings
+    from src.core.database import get_redis
+
+    settings = get_settings()
+    token = websocket.query_params.get("token", "")
+    try:
+        payload = _jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        if payload.get("type") != "access":
+            raise _jwt.InvalidTokenError("not an access token")
+    except _jwt.InvalidTokenError:
+        await websocket.close(code=4401, reason="invalid or missing token")
+        return
+
+    await websocket.accept()
+    redis = await get_redis()
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(ALERT_CHANNEL)
+    try:
+        async for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+            data = message["data"]
+            await websocket.send_text(
+                data.decode() if isinstance(data, bytes) else str(data)
+            )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await pubsub.unsubscribe(ALERT_CHANNEL)
+        await pubsub.close()

@@ -8,20 +8,16 @@ PERSON_EXITED events (E05-S01), webhook + WebSocket alert delivery
 Prerequisites: Sprint 2 fully passed (recognition live), infra containers
 healthy, at least one identity enrolled ("Rohan").
 
-> **BUILD STATUS — read first.** The detection/tracking/zone-event core and
-> all DB schemas + read APIs exist. The following are NOT yet implemented
-> and must be built before the marked steps can run; this guide is the
-> contract they are built against:
->
-> 1. `scripts/run_objects.py` — live YOLO object pipeline runner (STEP 3)
-> 2. Event persistence: PERSON_ENTERED/EXITED + zone_presence writer with
->    identity snapshots (`identity_state` = verified | provisional) and
->    append-only `IDENTITY_CORRECTED` re-attribution records (STEPs 4, 9)
-> 3. `object_counts` writer (STEP 5)
-> 4. Alert rule engine evaluating `configs/alerting/alert_rules.yaml` into
->    `alerts` rows (STEP 7)
-> 5. Webhook POST + WebSocket push delivery (STEP 8)
-> 6. Unknown-person candidate capture + review endpoints (STEP 10)
+> **BUILD STATUS: all six components are built.** For reference:
+> `scripts/run_objects.py` (live YOLO runner), `src/event_detection/`
+> (ZonePresenceMonitor + EventStore w/ identity_state + append-only
+> IDENTITY_CORRECTED), `src/object_counting/counter.py`,
+> `src/alerts/engine.py` + `delivery.py` (+ `/api/v1/alerts/ws` and
+> `scripts/webhook_listener.py`), candidate capture in
+> `src/face_recognition/candidates.py` with review endpoints under
+> `/api/v1/identities/candidates`. Rules with predicates beyond
+> `event_type`/`zone_type` equality (tailgating, loitering) load as
+> INACTIVE until the temporal-reasoning sprint.
 
 Hardware note (Linux 3090 on PCIe x1): YOLOv9-C at 1280 will be slower
 than the face pipeline. If fps < 8, drop input size to 960 or 640 —
@@ -150,8 +146,8 @@ While STEP 3 or 4 is running:
 
 ```bash
 sudo docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c "
-SELECT bucket, zone_id, class_name, obj_count
-FROM object_counts ORDER BY bucket DESC LIMIT 12;"
+SELECT bucket_time, zone_id, object_class, count
+FROM object_counts ORDER BY bucket_time DESC LIMIT 12;"
 ```
 
 **Expected:** periodic rows (e.g. 10 s buckets) per (zone, class):
@@ -213,13 +209,17 @@ Terminal A — webhook listener (script provided with the build):
 # and set in .env:  ALERT_WEBHOOK_URL=http://127.0.0.1:9000/hook
 ```
 
-Terminal B — WebSocket subscriber:
+Terminal B — WebSocket subscriber (needs `pip install websockets`; uses the
+$TOKEN from STEP 6 — browsers can't set headers on WS, so auth is a query
+param):
 
 ```bash
 .venv/bin/python -c "
-import asyncio, websockets, json
+import asyncio, json, os, websockets
 async def main():
-    async with websockets.connect('ws://127.0.0.1:8000/api/v1/alerts/ws') as ws:
+    url = 'ws://127.0.0.1:8000/api/v1/alerts/ws?token=' + os.environ['TOKEN']
+    async with websockets.connect(url) as ws:
+        print('subscribed — waiting for alerts ...')
         while True: print(json.loads(await ws.recv()))
 asyncio.run(main())"
 ```

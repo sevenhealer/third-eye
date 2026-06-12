@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
                    help="Match tracked faces against the pgvector gallery and "
                         "label them by name (needs postgres up and at least "
                         "one identity enrolled via scripts/enroll.py)")
+    p.add_argument("--persist-events", action="store_true",
+                   help="Write PERSON_ENTERED/EXITED + zone_presence + "
+                        "IDENTITY_CORRECTED to the database, evaluate alert "
+                        "rules (webhook/WebSocket delivery), and capture "
+                        "unknown-person enrollment candidates. Use together "
+                        "with --recognize for named events.")
     p.add_argument("--cpu", action="store_true",
                    help="Force CPU-only inference")
     p.add_argument("--gpu", type=int, default=None,
@@ -256,8 +262,8 @@ async def main() -> None:
     # what attaches a persistent identity to a track.
     gallery = None
     person_names: dict[str, str] = {}
-    # tid -> (label, sim_ema, frame_last_checked, consecutive_misses)
-    track_labels: dict[int, tuple[str, float, int, int]] = {}
+    # tid -> (label, sim_ema, frame_last_checked, consecutive_misses, person_id)
+    track_labels: dict[int, tuple[str, float, int, int, str | None]] = {}
     RECHECK_FRAMES = 30   # ~2s at 15fps: live-updating identity without per-frame DB load
     # Identity is assigned to the TRACK, so a name persists through turned-away
     # faces and blur. It can only be questioned after an event that could have
@@ -276,6 +282,41 @@ async def main() -> None:
         person_names = {str(r[0]): str(r[1]) for r in rows}
         print(f"Recognition: ON — {len(person_names)} enrolled identity(ies): "
               f"{', '.join(person_names.values()) or '—'}\n")
+
+    # Layer 6 (events/alerts): presence events with identity snapshots,
+    # alert rules, delivery, unknown-person candidates. See sprint3 guide.
+    event_store = None
+    presence = None
+    alert_engine = None
+    delivery = None
+    candidates = None
+    presence_rows: dict[int, int] = {}     # track_id -> zone_presence row id
+    named_since: dict[int, int] = {}       # track_id -> ns timestamp first named
+    if args.persist_events:
+        from src.alerts.delivery import AlertDelivery
+        from src.alerts.engine import AlertEngine
+        from src.core.config import get_settings
+        from src.event_detection.event_store import EventStore
+        from src.event_detection.zone_presence import PresentTrack, ZonePresenceMonitor
+        from src.face_recognition.candidates import CandidateCapture
+
+        event_store = EventStore()
+        zone_types = await event_store.load_zone_types()
+        presence = ZonePresenceMonitor(
+            camera_id=args.camera_id, zone_id=args.zone_id,
+            enter_grace_frames=5,
+            exit_grace_frames=max(int(args.fps * 3), 30),
+        )
+        alert_engine = AlertEngine(
+            ROOT / "configs" / "alerting" / "alert_rules.yaml", zone_types
+        )
+        delivery = AlertDelivery(webhook_url=get_settings().alert_webhook_url)
+        candidates = CandidateCapture(camera_id=args.camera_id)
+        zone_type = zone_types.get(args.zone_id, "general (zone not in DB!)")
+        print(f"Persistence: ON — zone '{args.zone_id}' type={zone_type}, "
+              f"webhook={'set' if get_settings().alert_webhook_url else 'none'}\n")
+        if not args.recognize:
+            print("  (note: without --recognize every person is 'unknown')\n")
 
     camera = CameraReader(source=source)
     if not camera.open():
@@ -325,7 +366,9 @@ async def main() -> None:
         nonlocal gallery
         if gallery is None or t.embedding is None:
             return ""
-        label, sim, checked, misses = track_labels.get(t.track_id, ("", 0.0, -999, 0))
+        label, sim, checked, misses, pid = track_labels.get(
+            t.track_id, ("", 0.0, -999, 0, None)
+        )
         named = label not in ("", "unknown", "?")
         due = label == "" or force or frame_count - checked >= RECHECK_FRAMES
         if due and (good_view or not named):
@@ -341,9 +384,18 @@ async def main() -> None:
                 if named and new_name != label:
                     print(f"  ! track {t.track_id} relabeled {label} -> {new_name} "
                           f"(sim {m.similarity:.2f})")
+                    if event_store is not None:
+                        await event_store.write_identity_correction(
+                            camera_id=args.camera_id, track_id=t.track_id,
+                            from_label=label, to_label=new_name,
+                            since_ns=named_since.get(t.track_id, time.time_ns()),
+                            zone_id=args.zone_id, similarity=m.similarity,
+                        )
+                if not named or new_name != label:
+                    named_since[t.track_id] = time.time_ns()
                 sim = m.similarity if (not named or new_name != label) \
                     else 0.7 * sim + 0.3 * m.similarity
-                label, misses = new_name, 0
+                label, misses, pid = new_name, 0, m.person_id
                 at_risk.pop(t.track_id, None)   # verified: track is clean again
             elif named:
                 # two-tier demotion: failures only count on good views (the
@@ -357,12 +409,23 @@ async def main() -> None:
                     why = ("risk event" if at_risk.get(t.track_id)
                            else f"{limit} clear views failed to verify")
                     print(f"  ! track {t.track_id} demoted: {label} -> unknown ({why})")
-                    label, sim, misses = "unknown", (m.similarity if m else 0.0), 0
+                    if event_store is not None:
+                        await event_store.write_identity_correction(
+                            camera_id=args.camera_id, track_id=t.track_id,
+                            from_label=label, to_label="unknown",
+                            since_ns=named_since.get(t.track_id, time.time_ns()),
+                            zone_id=args.zone_id,
+                            similarity=m.similarity if m else None,
+                        )
+                    named_since.pop(t.track_id, None)
+                    label, sim, misses, pid = (
+                        "unknown", (m.similarity if m else 0.0), 0, None
+                    )
                     at_risk.pop(t.track_id, None)
             else:
                 label = "?" if (m is not None and m.decision == "ambiguous") else "unknown"
-                sim, misses = (m.similarity if m else 0.0), 0
-            track_labels[t.track_id] = (label, sim, frame_count, misses)
+                sim, misses, pid = (m.similarity if m else 0.0), 0, None
+            track_labels[t.track_id] = (label, sim, frame_count, misses, pid)
         return f"{label} ({sim:.2f})"
 
     async def process_frame(frame, meta) -> None:
@@ -480,6 +543,78 @@ async def main() -> None:
                             (bbox[0], max(bbox[1] - 8, 30)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
+        if presence is not None:
+            present_list = []
+            for t in tracked:
+                label, sim, _, misses, pid = track_labels.get(
+                    t.track_id, ("", 0.0, -999, 0, None)
+                )
+                if label in ("", "?", "unknown"):
+                    state, name = "unknown", "unknown"
+                else:
+                    state = ("provisional"
+                             if at_risk.get(t.track_id) or misses > 0
+                             else "verified")
+                    name = label
+                present_list.append(PresentTrack(
+                    track_id=t.track_id, person_id=pid, person_name=name,
+                    identity_state=state, similarity=sim,
+                ))
+                bbox = t.bbox
+                short = float(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+                candidates.observe(
+                    t.track_id, t.embedding,
+                    is_unknown=(label == "unknown"),
+                    good_view=t.confidence >= args.det_thresh and short >= 32,
+                    quality=t.confidence,
+                )
+
+            try:
+                for ev in presence.update(present_list):
+                    print(f"  >> {ev.event_type}  {ev.person_name} "
+                          f"[{ev.identity_state}]  zone={ev.zone_id}")
+                    await event_store.write_presence_event(ev)
+                    if ev.event_type == "PERSON_ENTERED":
+                        row_id = await event_store.open_presence(ev)
+                        if row_id is not None:
+                            presence_rows[ev.track_id] = row_id
+                    elif ev.event_type == "PERSON_EXITED":
+                        row_id = presence_rows.pop(ev.track_id, None)
+                        if row_id is not None:
+                            await event_store.close_presence(row_id, ev.timestamp_ns)
+                    for trig in alert_engine.evaluate(
+                        event_type=ev.event_type, camera_id=ev.camera_id,
+                        zone_id=ev.zone_id, person_id=ev.person_id,
+                        person_name=ev.person_name,
+                        identity_state=ev.identity_state,
+                    ):
+                        alert_id = await event_store.write_alert(
+                            event_type=trig.event_type, severity=trig.severity,
+                            camera_id=trig.camera_id, zone_id=trig.zone_id,
+                            person_id=trig.person_id,
+                            description=trig.description, payload=trig.payload,
+                        )
+                        print(f"  !! ALERT [{trig.severity}] {trig.description} "
+                              f"(id={alert_id})")
+                        delivery.deliver({
+                            "alert_id": alert_id, "rule": trig.rule_name,
+                            "event_type": trig.event_type,
+                            "severity": trig.severity,
+                            "camera_id": trig.camera_id, "zone_id": trig.zone_id,
+                            "person": trig.payload.get("person"),
+                            "description": trig.description,
+                        })
+
+                if frame_count % 30 == 0:
+                    for draft in candidates.due():
+                        cid = await candidates.persist(draft)
+                        print(f"  >> enrollment candidate {cid[:8]}… created/merged "
+                              f"(track {draft.track_id}, "
+                              f"{len(draft.quality_scores)} crops)")
+            except Exception as exc:
+                # event persistence must never stall the frame loop
+                print(f"  ! event persistence error (frame continues): {exc}")
+
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
 
@@ -511,6 +646,8 @@ async def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if delivery is not None:
+            await delivery.drain()
         camera.release()
         if args.show:
             cv2.destroyAllWindows()

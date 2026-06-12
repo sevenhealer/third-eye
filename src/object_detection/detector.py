@@ -38,10 +38,14 @@ class YOLODetector:
         model_name: str = "yolov8n",
         conf_threshold: float = 0.25,
         class_filter: list[int] | None = None,
+        imgsz: int = 640,
+        device: str | None = None,
     ) -> None:
         self._model_name = model_name
         self._conf = conf_threshold
         self._class_filter = set(class_filter) if class_filter else None
+        self._imgsz = imgsz
+        self._device = device
         self._model = None
 
     def load(self) -> None:
@@ -50,6 +54,8 @@ class YOLODetector:
                 "ultralytics is not installed — run: pip install ultralytics"
             )
         self._model = _YOLO(self._model_name)
+        if self._device:
+            self._model.to(self._device)
 
     @property
     def is_loaded(self) -> bool:
@@ -59,7 +65,7 @@ class YOLODetector:
         if self._model is None:
             raise ModelNotLoadedError("Call load() before detect()")
 
-        results = self._model(frame, conf=self._conf, verbose=False)
+        results = self._model(frame, conf=self._conf, imgsz=self._imgsz, verbose=False)
         detections: list[ObjectDetection] = []
 
         for result in results:
