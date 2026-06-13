@@ -22,11 +22,16 @@ forensic:
 open_vocabulary:
   enabled: false            # turned on per-run via --vocab
   weight_file: "yolov8x-worldv2.pt"
+  confidence_threshold: 0.05   # YOLO-World scores low; 0.45 hides everything
+  # Use plain CLIP-friendly nouns (wardrobe not almirah, electric fan not fan)
   classes:                  # edit to your environment
     - person
-    - almirah
-    - ipad
+    - wardrobe
     - laptop
+    - tablet
+    - backpack
+    - cardboard box
+    - electric fan
     - water bottle
     - books
     - shoes

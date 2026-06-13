@@ -35,14 +35,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--imgsz", type=int, default=960,
                    help="Inference size (default 960; 1280 = better small/distant "
                         "objects, 640 = faster on slow PCIe links)")
-    p.add_argument("--conf", type=float, default=0.45,
-                   help="Detection confidence threshold")
+    p.add_argument("--conf", type=float, default=None,
+                   help="Detection confidence threshold. Default is mode-aware: "
+                        "0.45 closed-set, 0.05 open-vocab — YOLO-World scores far "
+                        "lower than closed YOLO, so a high threshold drops almost "
+                        "everything. Tune 0.01-0.1 for open-vocab.")
     p.add_argument("--vocab", default="",
-                   help="Comma-separated open-vocabulary class names "
-                        "(e.g. 'person,almirah,ipad,water bottle,books,shoes'). "
-                        "When set, uses YOLO-World to detect exactly these — "
-                        "fixes COCO misclassification (almirah->fridge etc) "
-                        "without training. Slower per frame.")
+                   help="Comma-separated open-vocabulary class names. Use plain, "
+                        "CLIP-friendly nouns (e.g. 'person,wardrobe,laptop,"
+                        "tablet,backpack,cardboard box,electric fan,water bottle,"
+                        "books,shoes'). Detects exactly these via YOLO-World — "
+                        "no COCO 80-class limit. Slower per frame.")
     p.add_argument("--show", action="store_true")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--gpu", type=int, default=None,
@@ -100,7 +103,9 @@ async def main() -> None:
             pass
 
     vocab = [c.strip() for c in args.vocab.split(",") if c.strip()] or None
-    detector = YOLODetector(model_name=args.model, conf_threshold=args.conf,
+    # YOLO-World needs a much lower floor than closed YOLO — see --conf help
+    conf = args.conf if args.conf is not None else (0.05 if vocab else 0.45)
+    detector = YOLODetector(model_name=args.model, conf_threshold=conf,
                             imgsz=args.imgsz, device=device, vocab=vocab)
     try:
         detector.load()
@@ -108,8 +113,10 @@ async def main() -> None:
         print(f"ERROR: {exc}")
         sys.exit(1)
 
+    # tracker's high band must sit at/above the detector floor; in open-vocab
+    # mode conf is tiny, so keep a sane 0.25 start-track gate either way
     tracker = ByteTracker(max_age=90, min_hits=3, iou_threshold=0.3,
-                          high_threshold=args.conf, low_threshold=0.1)
+                          high_threshold=max(conf, 0.25), low_threshold=conf)
     tracker.reset()
     zone_detector = ZoneEventDetector(removal_grace_frames=int(args.fps * 5) or 75)
     counter = ObjectCountAggregator(args.camera_id, args.zone_id, bucket_seconds=10)
@@ -132,7 +139,7 @@ async def main() -> None:
 
     print("=" * 62)
     mode = f"open-vocab ({len(vocab)} classes)" if vocab else "closed-set (COCO)"
-    print(f"  model           : {args.model} @ {args.imgsz}, conf {args.conf}")
+    print(f"  model           : {args.model} @ {args.imgsz}, conf {conf}")
     print(f"  detection mode  : {mode}")
     if vocab:
         print(f"  vocab           : {', '.join(vocab)}")

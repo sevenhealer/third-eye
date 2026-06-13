@@ -108,25 +108,39 @@ fire once each.
 
 ### 3b — Open-vocabulary (detect your actual objects, no training)
 
-List the things in *your* room as text; YOLO-World detects exactly those:
+List the things in *your* room as **plain, CLIP-friendly nouns**; YOLO-World
+detects exactly those:
 
 ```bash
 .venv/bin/python scripts/run_objects.py --source <rtsp-url> --show --fps 10 \
-  --camera-id cam0 --zone-id bedroom \
-  --vocab "person,almirah,ipad,water bottle,books,shoes,bed,chair"
+  --camera-id cam0 --zone-id bedroom --imgsz 1280 \
+  --vocab "person,wardrobe,laptop,tablet,backpack,cardboard box,electric fan,water bottle,books,shoes,bed,chair"
 ```
 
-**Expected:**
-- Banner: detection mode open-vocab (N classes), vocab listed
-- The almirah is now labelled `almirah` (not fridge), the iPad `ipad`
-  (not laptop); shelf items you named are detected
-- Slower per frame than 3a (expect lower fps on the x1 link — use it to
-  validate classes, not for max throughput)
-- Tune the prompts: add/rename classes until your scene reads correctly;
-  use specific phrases ("water bottle", "cardboard box")
+**Prompt wording is everything here** — YOLO-World matches your text against
+CLIP's vocabulary:
+- Use words CLIP knows: `wardrobe`/`cupboard` (not `almirah`), `electric fan`
+  or `pedestal fan` (not just `fan`), `cardboard box` (not `box`),
+  `laptop`/`tablet` (not `macbook`/`ipad`).
+- Confidence auto-drops to **0.05** in open-vocab mode (YOLO-World scores
+  much lower than closed YOLO — the old 0.45 default hid almost everything).
+  Still missing things? Lower further: `--conf 0.02`.
+- `--imgsz 1280` materially helps small shelf items.
 
-**Pass (3b):** the objects YOLO misclassified in 3a are correctly named
-when listed in --vocab.
+**Expected:**
+- Banner: detection mode open-vocab (N classes), conf 0.05, vocab listed
+- The wardrobe, fan, backpack, boxes, shelf items you named are now boxed
+- Slower per frame than 3a (use it to validate classes, not for max fps)
+
+**Honest limits of open-vocab:** close synonyms can swap (a laptop may read
+as `tablet` and vice-versa — CLIP embeds them near each other), and odd
+angles/clutter still get missed. This is correctness-for-free without
+training, not perfection — for reliable, unambiguous labels on YOUR objects,
+3c (fine-tuning) is the real fix.
+
+**Pass (3b):** objects missed/misclassified in 3a (wardrobe, fan, backpack,
+boxes) are now detected when listed in --vocab with the low conf. Some
+synonym confusion (laptop/tablet) is acceptable here.
 
 ### 3c — Fine-tune on your own footage (the permanent fix)
 
