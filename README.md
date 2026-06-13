@@ -18,8 +18,11 @@ anti-spoofing fine-tune pipeline.
 
 **Live validation is in progress sprint-by-sprint** against real infrastructure:
 
-- Sprint 1 (infra, API, audit log) — ✅ passed ([guide](scripts/sprint1_live_tests.md))
-- Sprint 2 (face pipeline) — 🔄 testing now ([guide](scripts/sprint2_live_tests.md))
+- Sprint 1 (infra, API, audit log) — ✅ passed ([guide](live_testing/sprint1_live_tests.md))
+- Sprint 2 (face pipeline + live recognition) — ✅ passed ([guide](live_testing/sprint2_live_tests.md))
+- Sprint 3 (objects, events, alerts, tracking) — 🔄 testing now ([guide](live_testing/sprint3_live_tests.md))
+
+All sprint live-test guides live in [`live_testing/`](live_testing/).
 
 Development runs on macOS (CPU/CoreML on Apple Silicon, `DEVICE=cpu`, MLflow on
 port 5001 due to AirPlay) and Linux + RTX 3090 (`DEVICE=cuda:0`). Production
@@ -35,7 +38,7 @@ targets an NVIDIA H100.
 | Face detection (SCRFD-10GF) | ✅ Implemented |
 | Anti-spoofing ensemble — MiniFASNet-V2 + CDCN++ + temporal consistency | ✅ Implemented |
 | Face recognition + identity enrollment (ArcFace R50 → AdaFace IR-101 planned) | ✅ Implemented |
-| Object detection + zone events (YOLOv9-C → RF-DETR/D-FINE planned) | ✅ Implemented |
+| Object detection + zone events (YOLO26 + YOLO-World open-vocab; domain fine-tuning pipeline) | ✅ Implemented |
 | Multi-object tracking + cross-camera ReID (ByteTrack/StrongSORT + OSNet → SOLIDER planned) | ✅ Implemented |
 | Model registry (SHA-256) + anti-spoofing fine-tune pipeline | ✅ Implemented |
 | Knowledge graph (Neo4j) + memory consolidation | 🏗️ Sprint 7 |
@@ -74,7 +77,7 @@ deployment evaluation harness.
   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
   │  Layer 2      │  │  Layer 5      │  │  Layer 8      │
   │  Face Detect  │  │  Object Det.  │  │  Action Recog │
-  │  SCRFD-10GF   │  │  YOLOv9-C     │  │  X3D-M +      │
+  │  SCRFD-10GF   │  │  YOLO26       │  │  X3D-M +      │
   └───────┬───────┘  └───────┬───────┘  │  VideoMAE-B   │
           │                  │          └───────┬───────┘
   ┌───────▼───────┐  ┌───────▼───────┐          │
@@ -146,11 +149,14 @@ deployment evaluation harness.
 
 ## Quick Start
 
-> **Developing right now?** The sprint-by-sprint live test guides are the fastest
-> path: [`scripts/sprint1_live_tests.md`](scripts/sprint1_live_tests.md) (infra + API)
-> and [`scripts/sprint2_live_tests.md`](scripts/sprint2_live_tests.md) (face pipeline).
+> **Developing right now?** The sprint-by-sprint live test guides in
+> [`live_testing/`](live_testing/) are the fastest path:
+> [infra + API](live_testing/sprint1_live_tests.md),
+> [face pipeline](live_testing/sprint2_live_tests.md),
+> [objects + events](live_testing/sprint3_live_tests.md).
 > Key CLI tools: `scripts/download_models.py` (one-time, ~200 MB),
-> `scripts/run_live.py --source 0 --show` (live webcam feed),
+> `scripts/run_live.py --source 0 --show` (live face feed),
+> `scripts/run_objects.py --source 0 --show` (live object feed),
 > `scripts/enroll.py --name "..."` (gallery enrollment).
 
 ### 1. Prerequisites
@@ -277,11 +283,11 @@ third-eye/
 │   ├── face_detection/         # Layer 2: SCRFD face detection
 │   ├── antispoofing/           # Layer 3: MiniFASNet-V2 + CDCN++ ensemble
 │   ├── face_recognition/       # Layer 4: AdaFace R100 + pgvector gallery
-│   ├── object_detection/       # Layer 5: YOLOv9-C
+│   ├── object_detection/       # Layer 5: YOLO26 (+ YOLO-World open-vocab)
 │   ├── object_counting/        # Layer 6: Track-based + DM-Count
 │   ├── tracking/               # Layer 7: ByteTrack + StrongSORT + OSNet ReID
 │   ├── action_recognition/     # Layer 8: X3D-M + VideoMAE-B
-│   ├── animal_detection/       # Layer 9: YOLOv9-C + EfficientNet-B3
+│   ├── animal_detection/       # Layer 9: YOLO26 + EfficientNet-B3
 │   ├── scene_understanding/    # Layer 10: CLIP + Qwen3.5
 │   ├── event_detection/        # Layer 11: Rule engine + anomaly detector
 │   ├── temporal_reasoning/     # Layer 12: Timelines + pattern miner
@@ -371,7 +377,7 @@ GET  /api/v1/admin/system-health     GPU + service health
 | SCRFD-10GF face detection | 500 MB | Continuous |
 | MiniFASNet-V2 + CDCN++ anti-spoofing | 550 MB | Continuous |
 | AdaFace R100 face recognition | 800 MB | Continuous |
-| YOLOv9-C object detection | 900 MB | Continuous |
+| YOLO26 object detection | 900 MB | Continuous |
 | OSNet-x1.0 ReID | 200 MB | Continuous |
 | X3D-M action (coarse) | 400 MB | Continuous |
 | CLIP ViT-L/14 scene | 900 MB | Continuous |
@@ -390,7 +396,7 @@ GET  /api/v1/admin/system-health     GPU + service health
 | Anti-spoofing (MiniFASNet + CDCN++) | **CRITICAL** | Pretrained generalizes poorly to site-specific lighting and attack types |
 | OSNet ReID | **HIGH** | Cross-camera accuracy requires deployment-camera adaptation |
 | Action Recognition (VideoMAE-B) | **HIGH** | Tailgating / loitering / rack access not in Kinetics-400 |
-| Object Detection (YOLOv9-C) | **HIGH** | Server racks, monitors, custom equipment not in COCO |
+| Object Detection (YOLO26) | **HIGH** | Domain items (almirah, equipment) not in COCO — open-vocab now, fine-tune for production |
 | Face Detection (SCRFD) | MEDIUM | Only needed with IR cameras or unusual lighting |
 | Face Recognition (AdaFace) | LOW | MS1MV3 pretrained sufficient up to ~200 gallery entries |
 
@@ -489,7 +495,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## Acknowledgements
 
 - [InsightFace](https://github.com/deepinsight/insightface) — SCRFD, ArcFace
-- [Ultralytics](https://github.com/ultralytics/ultralytics) — YOLOv9
+- [Ultralytics](https://github.com/ultralytics/ultralytics) — YOLO26, YOLO-World
 - [Qwen](https://github.com/QwenLM) — Qwen3.5 multimodal LLM
 - [Ollama](https://github.com/ollama/ollama) — Local LLM serving
 - [pgvector](https://github.com/pgvector/pgvector) — Vector similarity in PostgreSQL
