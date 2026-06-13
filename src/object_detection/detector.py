@@ -6,9 +6,11 @@ import numpy as np
 
 try:
     from ultralytics import YOLO as _YOLO
+    from ultralytics import YOLOWorld as _YOLOWorld
     _ULTRALYTICS_AVAILABLE = True
 except ImportError:
     _YOLO = None   # keep name defined so patch() can find it
+    _YOLOWorld = None
     _ULTRALYTICS_AVAILABLE = False
 
 
@@ -27,10 +29,19 @@ class ObjectDetection:
 
 class YOLODetector:
     """
-    Object detector backed by ultralytics YOLO (v8/v9/v10).
+    Object detector backed by ultralytics YOLO (v8 → YOLO26).
 
-    Guard: requires `ultralytics` package. Call load() before detect().
-    class_filter: if set, only return detections for those class IDs.
+    Two modes:
+      - Closed-set (default): the model's trained classes, e.g. COCO's 80.
+        Anything outside them is mapped to the nearest class or missed —
+        an almirah becomes "fridge", an iPad "laptop".
+      - Open-vocabulary: pass `vocab=[...]` of free-text class names; loads
+        YOLO-World and detects exactly those, so domain objects (almirah,
+        iPad, water bottle, ...) are found and labelled correctly without
+        retraining. Slower per frame than closed-set.
+
+    Guard: requires `ultralytics`. Call load() before detect().
+    class_filter (closed-set only): keep just these class IDs.
     """
 
     def __init__(
@@ -40,20 +51,34 @@ class YOLODetector:
         class_filter: list[int] | None = None,
         imgsz: int = 640,
         device: str | None = None,
+        vocab: list[str] | None = None,
     ) -> None:
         self._model_name = model_name
         self._conf = conf_threshold
         self._class_filter = set(class_filter) if class_filter else None
         self._imgsz = imgsz
         self._device = device
+        self._vocab = vocab
         self._model = None
+
+    @property
+    def is_open_vocab(self) -> bool:
+        return self._vocab is not None
 
     def load(self) -> None:
         if not _ULTRALYTICS_AVAILABLE:
             raise ModelNotLoadedError(
                 "ultralytics is not installed — run: pip install ultralytics"
             )
-        self._model = _YOLO(self._model_name)
+        if self._vocab is not None:
+            # default to a YOLO-World checkpoint if the caller didn't name one
+            name = self._model_name
+            if "world" not in name.lower():
+                name = "yolov8x-worldv2.pt"
+            self._model = _YOLOWorld(name)
+            self._model.set_classes(self._vocab)
+        else:
+            self._model = _YOLO(self._model_name)
         if self._device:
             self._model.to(self._device)
 

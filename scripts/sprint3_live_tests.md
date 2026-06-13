@@ -57,45 +57,106 @@ appearance/bank tests).
 
 ---
 
-## STEP 2 — YOLO weights
+## STEP 2 — YOLO26 weights
+
+YOLO26 (Ultralytics, Jan 2026) needs a current ultralytics:
 
 ```bash
-.venv/bin/pip install ultralytics
+.venv/bin/pip install -U ultralytics
 .venv/bin/python -c "
 from ultralytics import YOLO
-m = YOLO('yolov9c.pt')          # auto-downloads to ./yolov9c.pt (~50 MB)
+m = YOLO('yolo26m.pt')          # auto-downloads
 print('classes:', len(m.names), '| person id:', [k for k,v in m.names.items() if v=='person'])
 "
 ```
 
-**Expected:** `classes: 80 | person id: [0]` (COCO classes).
+**Expected:** `classes: 80 | person id: [0]`. (If `yolo26m.pt` fails to
+download, your ultralytics is too old — upgrade it; as a fallback any
+`yolo11m.pt`/`yolov9c.pt` works with `--model`.)
 
 ---
 
-## STEP 3 — Live object detection + tracking *(needs build #1)*
+## STEP 3 — Live object detection + tracking
+
+Detection has three modes, in increasing accuracy/effort. **Important:**
+COCO's 80 classes do not include domain items — an *almirah* will read as
+`fridge`, an *iPad* as `laptop`, and shelf items may be missed. That is a
+dataset limit, not a bug; 3b and 3c fix it.
+
+### 3a — YOLO26 closed-set (COCO 80)
 
 ```bash
 .venv/bin/python scripts/run_objects.py --source <rtsp-url> --show --fps 15 \
-  --camera-id cam0 --zone-id bedroom
+  --camera-id cam0 --zone-id bedroom --model yolo26m.pt --imgsz 960
 ```
 
 **Expected:**
-- Banner: GPU (CUDA), model yolov9c, conf 0.45
-- Same HUD/overlay conventions as the face runner (fps, infer ms, color
-  states, `ID:n` labels) — but boxes now cover persons AND objects
-  (chair, bed, bottle, laptop, cell phone, ...)
-- You get ONE stable person track while moving around (ByteTrack on
-  full-body boxes is much more forgiving than face boxes — full rotation
-  should NOT switch your ID here)
-- Static objects (bed, chair) hold stable IDs; the Krishna statue may be
-  detected as `person` by COCO YOLO — that is a known YOLO limitation,
-  note it and move on (face recognition is what tells persons apart)
-- Console prints `OBJECT_ADDED` when a new object appears in frame
-  (bring a bottle/laptop into view) and `OBJECT_REMOVED` ~5 s after you
-  take it away (removal grace prevents blink-removals)
+- Banner: GPU (CUDA), model yolo26m, detection mode closed-set (COCO)
+- Persons + COCO objects (chair, bed, bottle, laptop, cell phone) boxed;
+  HUD/overlay as in the face runner
+- ONE stable person track through a full body rotation (body boxes track
+  far better than face boxes)
+- Person/phone flicker should be markedly reduced vs the old yolov9c; if a
+  person still flickers, try `--model yolo26l.pt --imgsz 1280`
+- `OBJECT_ADDED` once when an object appears, `OBJECT_REMOVED` ~5 s after
+  removal
+- Misclassification of domain items (almirah→fridge, iPad→laptop) WILL
+  remain here — proceed to 3b
 
-**Pass:** person + ≥3 object classes detected; your body track survives a
-full rotation; ADDED/REMOVED fire exactly once per object appearance.
+**Pass (3a):** person + ≥3 COCO classes, stable body track, ADDED/REMOVED
+fire once each.
+
+### 3b — Open-vocabulary (detect your actual objects, no training)
+
+List the things in *your* room as text; YOLO-World detects exactly those:
+
+```bash
+.venv/bin/python scripts/run_objects.py --source <rtsp-url> --show --fps 10 \
+  --camera-id cam0 --zone-id bedroom \
+  --vocab "person,almirah,ipad,water bottle,books,shoes,bed,chair"
+```
+
+**Expected:**
+- Banner: detection mode open-vocab (N classes), vocab listed
+- The almirah is now labelled `almirah` (not fridge), the iPad `ipad`
+  (not laptop); shelf items you named are detected
+- Slower per frame than 3a (expect lower fps on the x1 link — use it to
+  validate classes, not for max throughput)
+- Tune the prompts: add/rename classes until your scene reads correctly;
+  use specific phrases ("water bottle", "cardboard box")
+
+**Pass (3b):** the objects YOLO misclassified in 3a are correctly named
+when listed in --vocab.
+
+### 3c — Fine-tune on your own footage (the permanent fix)
+
+Capture + auto-label your scene, review, then train a domain model:
+
+```bash
+# 1. capture & auto-label (uses open-vocab to bootstrap labels)
+.venv/bin/python scripts/capture_dataset.py --source <rtsp-url> \
+  --vocab "person,almirah,ipad,water bottle,books,shoes" \
+  --out datasets/room --every 1.0 --max 300
+
+# 2. REVIEW/CORRECT labels in datasets/room/ (Roboflow / labelImg / CVAT)
+#    — auto-labels are a starting point; fixing them is what buys accuracy
+
+# 3. train
+.venv/bin/python scripts/train_detector.py --data datasets/room/data.yaml \
+  --base yolo26m.pt --epochs 100 --name room_v1
+
+# 4. run live on the trained model
+.venv/bin/python scripts/run_objects.py --source <rtsp-url> --show \
+  --model runs/detect/room_v1/weights/best.pt
+```
+
+**Expected:** after training, the domain model detects your specific
+objects reliably at full closed-set speed (no open-vocab slowdown), with
+far fewer misclassifications than COCO.
+
+**Pass (3c):** trained model runs in run_objects and names your domain
+objects correctly. (This step is optional for closing Sprint 3 — 3a+3b
+satisfy the detection criteria; 3c is the production-quality follow-up.)
 
 ---
 
@@ -300,8 +361,11 @@ DELETE FROM persons WHERE display_name = 'Guest One';"
 ## Sprint 3 Pass Criteria
 
 - [ ] Object/tracker/zone-event unit tests pass
-- [ ] YOLOv9-C live: person + multiple object classes, stable IDs, body
-      track survives full rotation
+- [ ] YOLO26 closed-set live (3a): person + multiple COCO classes, stable
+      IDs, body track survives full rotation, flicker reduced vs yolov9c
+- [ ] Open-vocab (3b): domain objects (almirah, iPad, ...) named correctly
+      via --vocab
+- [ ] (Optional) Fine-tuned model (3c) runs in run_objects
 - [ ] OBJECT_ADDED / OBJECT_REMOVED fire exactly once per appearance,
       with removal grace
 - [ ] PERSON_ENTERED / PERSON_EXITED persisted with name + identity_state
@@ -319,8 +383,10 @@ DELETE FROM persons WHERE display_name = 'Guest One';"
 
 - Krishna statue detected as `person` by COCO YOLO (known model limit;
   identity layer keeps it `unknown`, anti-spoofing later rejects it)
-- Object classes outside COCO's 80 (specific tools, custom items) are
-  not detected — fine-tuning/forensic models come later
+- In closed-set mode (3a), domain objects outside COCO's 80 are missed or
+  misclassified (almirah→fridge, iPad→laptop) — this is expected; 3b
+  (open-vocab) and 3c (fine-tuning) are the fixes, not a YOLO-version bug
+- Open-vocab (3b) runs slower per frame — it's for correctness, not speed
 - Cross-camera identity continuity — Sprint 6
 - Action recognition ("what are they doing") — later sprint
 - fps lower than the face pipeline on the x1 link; use --det-size 640

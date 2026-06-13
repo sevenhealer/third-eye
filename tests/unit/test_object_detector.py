@@ -122,3 +122,39 @@ def test_class_filter_includes_wanted():
     result = detector.detect(np.zeros((480, 640, 3), dtype=np.uint8))
     assert len(result) == 1
     assert result[0].class_id == 0
+
+
+# ── open-vocabulary mode (YOLO-World) ────────────────────────────────────────
+
+def test_open_vocab_loads_yoloworld_and_sets_classes():
+    vocab = ["person", "almirah", "ipad"]
+    mock_model = _make_yolo_model()
+    with patch("src.object_detection.detector._ULTRALYTICS_AVAILABLE", True), \
+         patch("src.object_detection.detector._YOLOWorld",
+               return_value=mock_model) as world, \
+         patch("src.object_detection.detector._YOLO") as plain:
+        detector = YOLODetector(vocab=vocab)
+        assert detector.is_open_vocab
+        detector.load()
+        # YOLO-World path, not the closed-set YOLO path
+        world.assert_called_once()
+        plain.assert_not_called()
+        mock_model.set_classes.assert_called_once_with(vocab)
+
+
+def test_open_vocab_detects_prompted_classes():
+    vocab = ["person", "almirah"]
+    boxes = [_make_box(cls_id=1, conf=0.8)]   # index 1 -> "almirah"
+    result = _make_result(boxes=boxes, names={0: "person", 1: "almirah"})
+    mock_model = _make_yolo_model([result])
+    with patch("src.object_detection.detector._ULTRALYTICS_AVAILABLE", True), \
+         patch("src.object_detection.detector._YOLOWorld", return_value=mock_model):
+        detector = YOLODetector(vocab=vocab)
+        detector.load()
+        dets = detector.detect(np.zeros((480, 640, 3), dtype=np.uint8))
+    assert len(dets) == 1
+    assert dets[0].class_name == "almirah"
+
+
+def test_closed_set_default_is_not_open_vocab():
+    assert YOLODetector().is_open_vocab is False

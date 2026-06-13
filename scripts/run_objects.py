@@ -28,12 +28,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--camera-id", default="cam0")
     p.add_argument("--zone-id", default="bedroom")
     p.add_argument("--fps", type=int, default=15)
-    p.add_argument("--model", default="yolov9c.pt",
-                   help="Ultralytics weights (auto-downloads on first use)")
+    p.add_argument("--model", default="yolo26m.pt",
+                   help="Ultralytics weights (auto-downloads). YOLO26 variants: "
+                        "yolo26n/s (fast) yolo26m (balanced) yolo26l/x (accurate). "
+                        "Needs a current ultralytics: pip install -U ultralytics")
     p.add_argument("--imgsz", type=int, default=960,
-                   help="Inference size (default 960; use 640 on slow PCIe links)")
+                   help="Inference size (default 960; 1280 = better small/distant "
+                        "objects, 640 = faster on slow PCIe links)")
     p.add_argument("--conf", type=float, default=0.45,
                    help="Detection confidence threshold")
+    p.add_argument("--vocab", default="",
+                   help="Comma-separated open-vocabulary class names "
+                        "(e.g. 'person,almirah,ipad,water bottle,books,shoes'). "
+                        "When set, uses YOLO-World to detect exactly these — "
+                        "fixes COCO misclassification (almirah->fridge etc) "
+                        "without training. Slower per frame.")
     p.add_argument("--show", action="store_true")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--gpu", type=int, default=None,
@@ -90,8 +99,9 @@ async def main() -> None:
         except ImportError:
             pass
 
+    vocab = [c.strip() for c in args.vocab.split(",") if c.strip()] or None
     detector = YOLODetector(model_name=args.model, conf_threshold=args.conf,
-                            imgsz=args.imgsz, device=device)
+                            imgsz=args.imgsz, device=device, vocab=vocab)
     try:
         detector.load()
     except ModelNotLoadedError as exc:
@@ -121,7 +131,11 @@ async def main() -> None:
         sys.exit(1)
 
     print("=" * 62)
+    mode = f"open-vocab ({len(vocab)} classes)" if vocab else "closed-set (COCO)"
     print(f"  model           : {args.model} @ {args.imgsz}, conf {args.conf}")
+    print(f"  detection mode  : {mode}")
+    if vocab:
+        print(f"  vocab           : {', '.join(vocab)}")
     print(f"  device          : {device}")
     print(f"  camera/zone     : {args.camera_id} / {args.zone_id}")
     print(f"  persist events  : {'yes' if event_store else 'no'}")

@@ -1,30 +1,48 @@
+# YOLO26 (Ultralytics, Jan 2026): NMS-free, end-to-end. Variants
+# yolo26n/s/m/l/x. Needs a current ultralytics (pip install -U ultralytics).
 primary:
-  name: yolov9c
-  weight_file: "yolov9c.pt"
-  input_size: 1280
+  name: yolo26m
+  weight_file: "yolo26m.pt"
+  input_size: 960           # 1280 for small/distant objects, 640 on slow PCIe
   confidence_threshold: 0.45
   nms_threshold: 0.45
   use_tensorrt: ${USE_TENSORRT}
   device: ${DEVICE}
 
 forensic:
-  name: yolov9e
-  weight_file: "yolov9e.pt"
+  name: yolo26x
+  weight_file: "yolo26x.pt"
   input_size: 1280
   confidence_threshold: 0.35
   load_on_demand: true      # Only loaded when forensic search is triggered
 
-# Standard COCO classes always enabled
-# Custom domain classes (require fine-tuning):
+# Open-vocabulary detection (YOLO-World): detect domain objects by text
+# prompt WITHOUT training — fixes COCO misclassification (almirah->fridge,
+# iPad->laptop). Used by run_objects.py --vocab and the dataset auto-labeler.
+open_vocabulary:
+  enabled: false            # turned on per-run via --vocab
+  weight_file: "yolov8x-worldv2.pt"
+  classes:                  # edit to your environment
+    - person
+    - almirah
+    - ipad
+    - laptop
+    - water bottle
+    - books
+    - shoes
+    - chair
+    - bed
+
+# Custom domain classes — the permanent fix (scripts/train_detector.py).
+# Auto-label footage with open_vocabulary above, review, then fine-tune.
 custom_classes:
   enabled: false            # Set true after fine-tuning with domain data
-  weight_file: "yolov9c_custom.pt"
+  weight_file: "yolo26m_thirdeye.pt"
   classes:
+    - almirah
+    - ipad
     - server_rack
-    - monitor
-    - workstation
     - fire_extinguisher
-    - access_panel
     - desk
 
 # Per-camera ROI masks (filter detections to relevant regions)
