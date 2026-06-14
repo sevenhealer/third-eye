@@ -318,7 +318,8 @@ async def main() -> None:
         candidates = CandidateCapture(camera_id=args.camera_id)
         zone_type = zone_types.get(args.zone_id, "general (zone not in DB!)")
         print(f"Persistence: ON — zone '{args.zone_id}' type={zone_type}, "
-              f"webhook={'set' if get_settings().alert_webhook_url else 'none'}\n")
+              f"webhook={'set' if get_settings().alert_webhook_url else 'none'}")
+        print("  build: identity-correction churn-robust + diagnostics\n")
         if not args.recognize:
             print("  (note: without --recognize every person is 'unknown')\n")
 
@@ -584,6 +585,8 @@ async def main() -> None:
                             presence_rows[ev.track_id] = row_id
                         if ev.person_name == "unknown":
                             pending_unknown[ev.track_id] = row_id if row_id is not None else -1
+                            print(f"  .. [diag] pending unknown entry track={ev.track_id} "
+                                  f"row={row_id}; awaiting identity")
                     elif ev.event_type == "PERSON_EXITED":
                         row_id = presence_rows.pop(ev.track_id, None)
                         if row_id is not None:
@@ -632,6 +635,8 @@ async def main() -> None:
                     elif len(pending_unknown) == 1:
                         old_tid, row_id = pending_unknown.popitem()
                     else:
+                        print(f"  .. [diag] {pt.person_name} recognized but "
+                              f"{len(pending_unknown)} open unknowns — deferring")
                         continue   # ambiguous (multi-person) — defer to Sprint 6
                     await event_store.write_identity_correction(
                         camera_id=args.camera_id, track_id=pt.track_id,
@@ -652,8 +657,12 @@ async def main() -> None:
                               f"(track {draft.track_id}, "
                               f"{len(draft.quality_scores)} crops)")
             except Exception as exc:
-                # event persistence must never stall the frame loop
+                # event persistence must never stall the frame loop — but make
+                # the failure LOUD with a traceback so a silently-failing write
+                # (e.g. a correction insert) is visible during testing
+                import traceback
                 print(f"  ! event persistence error (frame continues): {exc}")
+                traceback.print_exc()
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
