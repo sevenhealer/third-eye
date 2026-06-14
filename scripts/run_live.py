@@ -637,12 +637,14 @@ async def main() -> None:
 
                 # late resolution: an entry recorded as unknown (recognition
                 # hadn't caught up) is now recognized — re-attribute it with an
-                # append-only correction AND patch the open presence row. This
-                # does NOT require the resolving track to share the entry's id:
-                # face-track churn often changes the id between entry and
-                # resolution. Same-track first; else, single-person-safe, the
-                # one open unknown entry is this person. Multiple open unknowns
-                # (multi-person) are left for Sprint 6 identity-level presence.
+                # append-only correction AND patch the open presence row.
+                # Same-track first (the entry's own track resolved). The
+                # single-pending fallback handles face-track id churn (entry and
+                # resolution under different ids) — but ONLY for a track that has
+                # no entry of its own (`not in presence_rows`); otherwise an
+                # already-present person (e.g. Rohan) would wrongly claim a newly
+                # entered person's (Subhra's) pending entry. Multiple pending
+                # unknowns are deferred to Sprint 6 identity-level presence.
                 for pt in present_list:
                     recognized = (
                         pt.identity_state in ("verified", "provisional")
@@ -652,12 +654,12 @@ async def main() -> None:
                         continue
                     if pt.track_id in pending_unknown:
                         old_tid, row_id = pt.track_id, pending_unknown.pop(pt.track_id)
-                    elif len(pending_unknown) == 1:
+                    elif len(pending_unknown) == 1 and pt.track_id not in presence_rows:
+                        # churn: this recognized track has no entry of its own,
+                        # and there's exactly one open unknown → same person
                         old_tid, row_id = pending_unknown.popitem()
                     else:
-                        print(f"  .. [diag] {pt.person_name} recognized but "
-                              f"{len(pending_unknown)} open unknowns — deferring")
-                        continue   # ambiguous (multi-person) — defer to Sprint 6
+                        continue   # ambiguous / already-present — don't guess
                     await event_store.write_identity_correction(
                         camera_id=args.camera_id, track_id=pt.track_id,
                         from_label="unknown", to_label=pt.person_name,
