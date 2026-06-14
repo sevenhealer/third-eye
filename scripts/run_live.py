@@ -324,7 +324,12 @@ async def main() -> None:
             ROOT / "configs" / "alerting" / "alert_rules.yaml", zone_types
         )
         delivery = AlertDelivery(webhook_url=get_settings().alert_webhook_url)
-        candidates = CandidateCapture(camera_id=args.camera_id)
+        from src.storage import get_object_store
+        store = get_object_store()
+        if store.is_enabled:
+            store.ensure_bucket()
+        candidates = CandidateCapture(camera_id=args.camera_id, object_store=store)
+        print(f"  object storage: {'on' if store.is_enabled else 'off (no S3 endpoint)'}")
         zone_type = zone_types.get(args.zone_id, "general (zone not in DB!)")
         print(f"Persistence: ON — zone '{args.zone_id}' type={zone_type}, "
               f"webhook={'set' if get_settings().alert_webhook_url else 'none'}")
@@ -578,11 +583,25 @@ async def main() -> None:
                 ))
                 bbox = t.bbox
                 short = float(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+                good_view = t.confidence >= args.det_thresh and short >= 32
+                # for an unknown good view, hand the capture a JPEG face crop so
+                # the candidate has a viewable photo (stored in MinIO)
+                crop_jpeg = None
+                if label == "unknown" and good_view and store.is_enabled:
+                    b = bbox.astype(int)
+                    x1, y1 = max(b[0], 0), max(b[1], 0)
+                    x2, y2 = max(b[2], 0), max(b[3], 0)
+                    face = frame[y1:y2, x1:x2]
+                    if face.size:
+                        ok_enc, buf = cv2.imencode(".jpg", face)
+                        if ok_enc:
+                            crop_jpeg = buf.tobytes()
                 candidates.observe(
                     t.track_id, t.embedding,
                     is_unknown=(label == "unknown"),
-                    good_view=t.confidence >= args.det_thresh and short >= 32,
+                    good_view=good_view,
                     quality=t.confidence,
+                    crop=crop_jpeg,
                 )
 
             try:

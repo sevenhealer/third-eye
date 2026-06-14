@@ -116,8 +116,9 @@ async def enroll_identity(
 # NOTE: declared before /{person_id} so "candidates" isn't parsed as a UUID.
 
 class CandidateApproveRequest(BaseModel):
-    display_name: str
+    display_name: str | None = None   # required when creating a NEW person
     role: str = "visitor"
+    person_id: UUID | None = None     # set to MERGE into an existing person
 
 
 @router.get("/candidates")
@@ -127,14 +128,26 @@ async def list_candidates(
     candidate_status: str = Query("pending", alias="status"),
 ) -> dict:
     current_user.require_role("admin")
+    # LATERAL join surfaces the nearest enrolled person to each candidate —
+    # the "this unknown looks like Rohan (0.62)" hint that drives the merge
+    # decision (approve-to-existing vs create-new).
     result = await db.execute(
         text("""
-            SELECT candidate_id, track_id, camera_id, first_seen_at,
-                   last_seen_at, quality_scores, status,
-                   vector_dims(mean_embedding) AS dims
-            FROM enrollment_candidates
-            WHERE status = :status
-            ORDER BY last_seen_at DESC
+            SELECT c.candidate_id, c.track_id, c.camera_id, c.first_seen_at,
+                   c.last_seen_at, c.quality_scores, c.crop_paths, c.status,
+                   vector_dims(c.mean_embedding) AS dims,
+                   m.person_id AS sugg_id, m.display_name AS sugg_name, m.sim AS sugg_sim
+            FROM enrollment_candidates c
+            LEFT JOIN LATERAL (
+                SELECT p.person_id, p.display_name,
+                       1 - (g.embedding <=> c.mean_embedding) AS sim
+                FROM face_gallery g JOIN persons p USING (person_id)
+                WHERE c.mean_embedding IS NOT NULL AND p.is_active
+                ORDER BY g.embedding <=> c.mean_embedding
+                LIMIT 1
+            ) m ON true
+            WHERE c.status = :status
+            ORDER BY c.last_seen_at DESC
             LIMIT 100
         """),
         {"status": candidate_status},
@@ -147,9 +160,14 @@ async def list_candidates(
                 "camera_id": r.camera_id,
                 "first_seen_at": r.first_seen_at.isoformat(),
                 "last_seen_at": r.last_seen_at.isoformat(),
-                "crop_count": len(r.quality_scores or []),
+                "crop_count": len(r.crop_paths or []),
+                "crop_paths": r.crop_paths or [],
                 "embedding_dims": r.dims,
                 "status": r.status,
+                # suggested existing match — null if no gallery/no faces
+                "suggested_person_id": str(r.sugg_id) if r.sugg_id else None,
+                "suggested_name": r.sugg_name,
+                "suggested_similarity": round(float(r.sugg_sim), 3) if r.sugg_sim is not None else None,
             }
             for r in result.fetchall()
         ]
@@ -180,18 +198,42 @@ async def approve_candidate(
             detail="Candidate not found, not pending, or has no embedding.",
         )
 
-    row = (await db.execute(
-        text("""
-            INSERT INTO persons (display_name, role, enrolled_by)
-            VALUES (:name, :role, :uid)
-            RETURNING person_id, display_name, role, enrolled_at,
-                      is_active, last_seen_at, last_seen_zone, metadata
-        """),
-        {"name": body.display_name, "role": body.role,
-         "uid": str(current_user.user_id)},
-    )).fetchone()
+    if body.person_id is not None:
+        # MERGE: re-sighting of someone already enrolled — add this candidate's
+        # embedding to their gallery (improves recognition) instead of making a
+        # duplicate person. This is the operator-confirmed re-sighting case.
+        person = (await db.execute(
+            text("""
+                SELECT person_id, display_name, role, enrolled_at, is_active,
+                       last_seen_at, last_seen_zone, metadata
+                FROM persons WHERE person_id = :pid AND is_active
+            """),
+            {"pid": str(body.person_id)},
+        )).fetchone()
+        if person is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Target person not found or inactive.",
+            )
+    else:
+        if not body.display_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="display_name required when creating a new person "
+                       "(or pass person_id to merge into an existing one).",
+            )
+        person = (await db.execute(
+            text("""
+                INSERT INTO persons (display_name, role, enrolled_by)
+                VALUES (:name, :role, :uid)
+                RETURNING person_id, display_name, role, enrolled_at,
+                          is_active, last_seen_at, last_seen_zone, metadata
+            """),
+            {"name": body.display_name, "role": body.role,
+             "uid": str(current_user.user_id)},
+        )).fetchone()
 
-    # candidate's mean embedding becomes the person's first gallery entry
+    # candidate's mean embedding is added to the (new or existing) gallery
     await db.execute(
         text("""
             INSERT INTO face_gallery
@@ -199,7 +241,7 @@ async def approve_candidate(
             SELECT :pid, mean_embedding, 0.75, camera_id
             FROM enrollment_candidates WHERE candidate_id = :cid
         """),
-        {"pid": str(row.person_id), "cid": str(candidate_id)},
+        {"pid": str(person.person_id), "cid": str(candidate_id)},
     )
     await db.execute(
         text("""
@@ -208,29 +250,30 @@ async def approve_candidate(
                 assigned_person_id = :pid
             WHERE candidate_id = :cid
         """),
-        {"uid": str(current_user.user_id), "pid": str(row.person_id),
+        {"uid": str(current_user.user_id), "pid": str(person.person_id),
          "cid": str(candidate_id)},
     )
     await db.commit()
 
     await write_audit_event(
-        db, "CANDIDATE_APPROVED",
+        db, "CANDIDATE_MERGED" if body.person_id else "CANDIDATE_APPROVED",
         actor_id=current_user.user_id,
         actor_username=current_user.username,
         resource_type="enrollment_candidate",
         resource_id=str(candidate_id),
-        details={"display_name": body.display_name,
-                 "person_id": str(row.person_id)},
+        details={"display_name": person.display_name,
+                 "person_id": str(person.person_id),
+                 "merged": bool(body.person_id)},
     )
     return PersonOut(
-        person_id=row.person_id,
-        display_name=row.display_name,
-        role=row.role,
-        enrolled_at=row.enrolled_at.isoformat(),
-        is_active=row.is_active,
+        person_id=person.person_id,
+        display_name=person.display_name,
+        role=person.role,
+        enrolled_at=person.enrolled_at.isoformat(),
+        is_active=person.is_active,
         last_seen_at=None,
         last_seen_zone=None,
-        metadata=row.metadata or {},
+        metadata=person.metadata or {},
     )
 
 
