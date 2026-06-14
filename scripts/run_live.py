@@ -305,6 +305,13 @@ async def main() -> None:
         from src.face_recognition.candidates import CandidateCapture
 
         event_store = EventStore()
+        # self-register zone + camera so zone_presence FKs are satisfied
+        # (otherwise the first PERSON_ENTERED's presence insert FK-violates and
+        # aborts event handling — including the identity correction — each frame)
+        await event_store.ensure_zone(args.zone_id)
+        await event_store.ensure_camera(
+            args.camera_id, stream_url=str(args.source), zone_id=args.zone_id
+        )
         zone_types = await event_store.load_zone_types()
         presence = ZonePresenceMonitor(
             camera_id=args.camera_id, zone_id=args.zone_id,
@@ -580,11 +587,20 @@ async def main() -> None:
                           f"[{ev.identity_state}]  zone={ev.zone_id}  track={ev.track_id}")
                     await event_store.write_presence_event(ev)
                     if ev.event_type == "PERSON_ENTERED":
-                        row_id = await event_store.open_presence(ev)
+                        # park unknowns FIRST so a presence-insert failure can't
+                        # stop the later identity correction
+                        if ev.person_name == "unknown":
+                            pending_unknown[ev.track_id] = -1
+                        try:
+                            row_id = await event_store.open_presence(ev)
+                        except Exception as exc:
+                            row_id = None
+                            print(f"  ! open_presence failed (continuing): {exc}")
                         if row_id is not None:
                             presence_rows[ev.track_id] = row_id
+                            if ev.track_id in pending_unknown:
+                                pending_unknown[ev.track_id] = row_id
                         if ev.person_name == "unknown":
-                            pending_unknown[ev.track_id] = row_id if row_id is not None else -1
                             print(f"  .. [diag] pending unknown entry track={ev.track_id} "
                                   f"row={row_id}; awaiting identity")
                     elif ev.event_type == "PERSON_EXITED":

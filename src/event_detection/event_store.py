@@ -219,6 +219,38 @@ class EventStore:
             row = result.fetchone()
             return str(row[0]) if row else None
 
+    async def ensure_zone(self, zone_id: str, zone_type: str = "general") -> None:
+        """Self-register the zone so zone_presence's FK is satisfied. Existing
+        zones (incl. manually-seeded 'restricted' ones) are left untouched."""
+        async with get_db_session() as session:
+            await session.execute(
+                text("""
+                    INSERT INTO zones (zone_id, display_name, zone_type)
+                    VALUES (:z, :z, :zt)
+                    ON CONFLICT (zone_id) DO NOTHING
+                """),
+                {"z": zone_id, "zt": zone_type},
+            )
+            await session.commit()
+
+    async def ensure_camera(
+        self, camera_id: str, stream_url: str = "", zone_id: str | None = None
+    ) -> None:
+        """Self-register the camera so zone_presence's camera_id FK is satisfied.
+        Without this, the very first PERSON_ENTERED's presence insert throws a
+        foreign-key violation and aborts event handling for the frame."""
+        async with get_db_session() as session:
+            await session.execute(
+                text("""
+                    INSERT INTO cameras (camera_id, display_name, stream_url, zone_id)
+                    VALUES (:cid, :name, :url, :zone)
+                    ON CONFLICT (camera_id) DO NOTHING
+                """),
+                {"cid": camera_id, "name": camera_id,
+                 "url": stream_url or camera_id, "zone": zone_id},
+            )
+            await session.commit()
+
     async def load_zone_types(self) -> dict[str, str]:
         """zone_id -> zone_type, for alert rule evaluation."""
         async with get_db_session() as session:
