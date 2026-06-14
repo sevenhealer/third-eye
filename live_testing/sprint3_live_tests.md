@@ -144,16 +144,23 @@ synonym confusion (laptop/tablet) is acceptable here.
 
 ### 3c — Fine-tune on your own footage (the permanent fix)
 
-Capture + auto-label your scene, review, then train a domain model:
+The full loop you sketched — propose → review → correct → save → train:
 
 ```bash
-# 1. capture & auto-label (uses open-vocab to bootstrap labels)
+# 1. capture & auto-label (open-vocab bootstraps the boxes)
 .venv/bin/python scripts/capture_dataset.py --source <rtsp-url> \
-  --vocab "person,almirah,ipad,water bottle,books,shoes" \
+  --vocab "person,wardrobe,laptop,tablet,backpack,cardboard box,electric fan" \
   --out datasets/room --every 1.0 --max 300
 
-# 2. REVIEW/CORRECT labels in datasets/room/ (Roboflow / labelImg / CVAT)
-#    — auto-labels are a starting point; fixing them is what buys accuracy
+# 2. REVIEW/CORRECT the auto-labels (this is the step that buys accuracy)
+.venv/bin/python scripts/review_labels.py --dataset datasets/room
+#   per frame: click a box to select it, then
+#     d = delete (reject)        c/C = cycle its class (rename)
+#     drag empty area = draw a new box   0-9 = set active class
+#     n = save+next   p = prev   u = revert frame   q = save+quit
+#   keep good boxes as-is (accept), fix wrong ones, add missed objects.
+#   Heavy corner-dragging at scale? Import datasets/room into Label Studio
+#   or CVAT (local, free) — same YOLO format — then re-export and train.
 
 # 3. train
 .venv/bin/python scripts/train_detector.py --data datasets/room/data.yaml \
