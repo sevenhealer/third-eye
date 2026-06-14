@@ -215,8 +215,15 @@ async def main() -> None:
 
         if frame_count % 30 == 0:
             summary = ", ".join(f"{c}:{n}" for c, n in sorted(class_counts.items())) or "—"
+            # raw detector output (pre-tracker) — compare to tracked summary:
+            # if RAW is right but TRACKED is wrong, it's a tracking bug; if RAW
+            # itself is wrong (person->refrigerator), it's the model/input
+            raw: dict[str, int] = {}
+            for det in detections:
+                raw[det.class_name] = raw.get(det.class_name, 0) + 1
+            raw_summary = ", ".join(f"{c}:{n}" for c, n in sorted(raw.items())) or "—"
             print(f"  [{frame_count:>6}] fps {fps_ema:4.1f}  infer {last_infer_ms:3.0f} ms"
-                  f"  tracks {len(tracked)}  ({summary})")
+                  f"  RAW({raw_summary})  TRACKED({summary})")
 
         if args.show:
             for t in tracked:

@@ -245,6 +245,35 @@ def test_revived_track_resumes_iou_tracking():
     assert r[0].track_id == tid
 
 
+# ── class-aware matching (multi-class object tracking) ───────────────────────
+
+def test_detection_does_not_inherit_other_class_track():
+    """A person detection overlapping a chair track must NOT match it and
+    inherit 'chair' — the bug where crossing an object stole its label."""
+    tracker = fresh_tracker(min_hits=1, high_threshold=0.6)
+    # establish a chair track at a location
+    chair = _det(100, 100, 200, 200, conf=0.9, cls_id=56, name="chair")
+    tracker.update([chair])
+    # a person appears at the SAME spot (high IoU) — must stay 'person'
+    person = _det(100, 100, 200, 200, conf=0.9, cls_id=0, name="person")
+    result = tracker.update([person])
+    person_tracks = [t for t in result if t.class_name == "person"]
+    assert person_tracks, "person detection lost its class to the chair track"
+    assert all(t.class_name != "person" or t.class_id == 0 for t in result)
+
+
+def test_matched_track_label_follows_detection():
+    tracker = fresh_tracker(min_hits=1, high_threshold=0.6)
+    d1 = _det(0, 0, 50, 50, conf=0.9, cls_id=0, name="person")
+    r = tracker.update([d1])
+    assert r[0].class_name == "person"
+    # same id, slightly moved, still person
+    d2 = _det(2, 2, 52, 52, conf=0.9, cls_id=0, name="person")
+    r2 = tracker.update([d2])
+    assert r2[0].track_id == r[0].track_id
+    assert r2[0].class_name == "person"
+
+
 def test_reset_clears_all_state():
     tracker = fresh_tracker(min_hits=1, high_threshold=0.6)
     for _ in range(3):

@@ -274,6 +274,14 @@ class ByteTracker:
         track_bboxes = [predicted[tid] for tid in track_ids]
         det_bboxes = [d.bbox for d in dets]
         cost = iou_matrix(det_bboxes, track_bboxes)
+        # class-aware matching: a person detection must not match a chair track.
+        # Without this the tracker (built single-class for faces) bleeds labels
+        # across classes — a person crossing a chair inherits "chair", and a
+        # stray misdetection can capture a track and stick its wrong class.
+        for i, d in enumerate(dets):
+            for j, tid in enumerate(track_ids):
+                if d.class_id != self._tracks[tid].class_id:
+                    cost[i, j] = 0.0
         matches, unmatched_dets, _ = hungarian_match(cost, self.iou_threshold)
 
         matched_ids: set[int] = set()
@@ -283,6 +291,9 @@ class ByteTracker:
             t = self._tracks[tid]
             t.bbox = self._kalman[tid].bbox
             t.confidence = dets[det_i].confidence
+            # keep the track's label current with the detection it matched
+            t.class_id = dets[det_i].class_id
+            t.class_name = dets[det_i].class_name
             t.time_since_update = 0
             t.hits += 1
             if t.hits >= self.min_hits:
