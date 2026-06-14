@@ -462,8 +462,17 @@ curl -s "http://127.0.0.1:8000/api/v1/identities/candidates?status=pending" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
-**Expected:** one pending candidate with crop count ≥ 5, a 512-dim mean
-embedding, first/last seen timestamps. Approve it:
+**Expected:** one pending candidate with `crop_count` ≥ 5, `crop_paths`
+(MinIO keys of saved face photos), a 512-dim mean embedding, and — if any
+faces are enrolled — a `suggested_person_id`/`suggested_name`/
+`suggested_similarity` (the nearest enrolled identity, e.g. "looks like
+Rohan 0.62"). View a saved crop:
+
+```bash
+sudo docker exec third-eye-minio-1 mc cat local/thirdeye-evidence/<crop_path>  # or browse http://localhost:9001
+```
+
+**(a) Label a NEW person** — create + enroll:
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8000/api/v1/identities/candidates/<id>/approve" \
@@ -471,11 +480,22 @@ curl -s -X POST "http://127.0.0.1:8000/api/v1/identities/candidates/<id>/approve
   -d '{"display_name": "Guest One", "role": "visitor"}' | python3 -m json.tool
 ```
 
-**Pass:** approval creates the person + gallery rows (audit-logged); the
-live feed names them `Guest One` within one re-check cycle; rejecting a
-candidate stores `rejected` and never touches `persons`. Duplicate
-candidates for the same unknown face within one session are merged, not
-multiplied.
+**(b) MERGE a re-sighting into an existing person** — when the suggestion
+says it's someone already enrolled, add this candidate's embedding to their
+gallery (improves recognition) instead of duplicating:
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/api/v1/identities/candidates/<id>/approve" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"person_id": "<existing-person-uuid>"}' | python3 -m json.tool
+```
+
+**Pass:** (a) creates the person + gallery rows (audit `CANDIDATE_APPROVED`)
+and the live feed names them within one re-check cycle; (b) adds an embedding
+to the existing person's gallery (audit `CANDIDATE_MERGED`), no duplicate
+person; rejecting stores `rejected` and never touches `persons`; saved face
+crops are viewable in MinIO; distinct unknowns are separate candidates while
+the same unknown seen twice is merged.
 
 ---
 
