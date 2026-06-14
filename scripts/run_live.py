@@ -292,7 +292,10 @@ async def main() -> None:
     candidates = None
     presence_rows: dict[int, int] = {}     # track_id -> zone_presence row id
     named_since: dict[int, int] = {}       # track_id -> ns timestamp first named
-    entered_label: dict[int, str] = {}     # track_id -> person at PERSON_ENTERED (for late correction)
+    # track_id -> open presence row_id for entries recorded as unknown, still
+    # awaiting identity resolution. Keyed by entry track, but resolution can
+    # come from a DIFFERENT track id (face-track churn) — see reconciliation.
+    pending_unknown: dict[int, int] = {}
     if args.persist_events:
         from src.alerts.delivery import AlertDelivery
         from src.alerts.engine import AlertEngine
@@ -579,12 +582,13 @@ async def main() -> None:
                         row_id = await event_store.open_presence(ev)
                         if row_id is not None:
                             presence_rows[ev.track_id] = row_id
-                        entered_label[ev.track_id] = ev.person_name
+                        if ev.person_name == "unknown":
+                            pending_unknown[ev.track_id] = row_id if row_id is not None else -1
                     elif ev.event_type == "PERSON_EXITED":
                         row_id = presence_rows.pop(ev.track_id, None)
                         if row_id is not None:
                             await event_store.close_presence(row_id, ev.timestamp_ns)
-                        entered_label.pop(ev.track_id, None)
+                        pending_unknown.pop(ev.track_id, None)
                     for trig in alert_engine.evaluate(
                         event_type=ev.event_type, camera_id=ev.camera_id,
                         zone_id=ev.zone_id, person_id=ev.person_id,
@@ -608,40 +612,38 @@ async def main() -> None:
                             "description": trig.description,
                         })
 
-                # late resolution: a track that ENTERED as unknown (recognition
-                # hadn't caught up at entry) but is now recognized — re-attribute
-                # its entry with an append-only correction AND patch its open
-                # presence row, so the forensic record reflects the truth.
+                # late resolution: an entry recorded as unknown (recognition
+                # hadn't caught up) is now recognized — re-attribute it with an
+                # append-only correction AND patch the open presence row. This
+                # does NOT require the resolving track to share the entry's id:
+                # face-track churn often changes the id between entry and
+                # resolution. Same-track first; else, single-person-safe, the
+                # one open unknown entry is this person. Multiple open unknowns
+                # (multi-person) are left for Sprint 6 identity-level presence.
                 for pt in present_list:
                     recognized = (
                         pt.identity_state in ("verified", "provisional")
                         and pt.person_name not in ("unknown", "?")
                     )
-                    if not recognized:
+                    if not recognized or not pending_unknown:
                         continue
-                    if entered_label.get(pt.track_id) == "unknown":
-                        await event_store.write_identity_correction(
-                            camera_id=args.camera_id, track_id=pt.track_id,
-                            from_label="unknown", to_label=pt.person_name,
-                            since_ns=time.time_ns(), zone_id=args.zone_id,
-                            similarity=pt.similarity,
-                        )
-                        row_id = presence_rows.get(pt.track_id)
-                        if row_id is not None:
-                            await event_store.resolve_presence_identity(row_id, pt.person_id)
-                        print(f"  >> IDENTITY_CORRECTED track {pt.track_id}: "
-                              f"unknown -> {pt.person_name}")
-                        entered_label[pt.track_id] = pt.person_name   # once
-                    elif (
-                        pt.track_id in presence_rows
-                        and pt.track_id not in entered_label
-                    ):
-                        # diagnostic: this track is recognized and has an open
-                        # entry, but no record of how it entered — means the
-                        # entering track had a DIFFERENT id (face-track ID
-                        # instability). Logs so we can confirm the hypothesis.
-                        print(f"  .. [debug] track {pt.track_id} = {pt.person_name} "
-                              f"has open entry but no entered_label (ID changed mid-presence?)")
+                    if pt.track_id in pending_unknown:
+                        old_tid, row_id = pt.track_id, pending_unknown.pop(pt.track_id)
+                    elif len(pending_unknown) == 1:
+                        old_tid, row_id = pending_unknown.popitem()
+                    else:
+                        continue   # ambiguous (multi-person) — defer to Sprint 6
+                    await event_store.write_identity_correction(
+                        camera_id=args.camera_id, track_id=pt.track_id,
+                        from_label="unknown", to_label=pt.person_name,
+                        since_ns=time.time_ns(), zone_id=args.zone_id,
+                        similarity=pt.similarity,
+                    )
+                    if row_id and row_id > 0:
+                        await event_store.resolve_presence_identity(row_id, pt.person_id)
+                    arrow = (f"track {old_tid}->{pt.track_id}"
+                             if old_tid != pt.track_id else f"track {pt.track_id}")
+                    print(f"  >> IDENTITY_CORRECTED {arrow}: unknown -> {pt.person_name}")
 
                 if frame_count % 30 == 0:
                     for draft in candidates.due():
