@@ -19,6 +19,7 @@ volumes:
   prometheus_data:
   grafana_data:
   ollama_models:
+  minio_data:
 
 # ── GPU helper ────────────────────────────────────────────────────────────────
 x-gpu: &gpu
@@ -60,6 +61,27 @@ services:
     networks: [backend]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thirdeye}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    <<: [*restart, *logging]
+    # Self-hosted S3-compatible object storage for clips, snapshots, face crops
+    # and evidence. Console on :9001, S3 API on :9000.
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-thirdeye}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
       interval: 10s
       timeout: 5s
       retries: 5

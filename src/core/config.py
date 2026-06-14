@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "kafka:9092"
     kafka_consumer_group: str = "third-eye-main"
 
+    # ── Object storage (MinIO / S3-compatible) — clips, snapshots, evidence ────
+    s3_endpoint_url: str = "http://minio:9000"   # empty disables object storage
+    s3_access_key: str = "thirdeye"
+    s3_secret_key: str = ""
+    s3_bucket: str = "thirdeye-evidence"
+    s3_region: str = "us-east-1"
+
     # ── Models ────────────────────────────────────────────────────────────────
     models_dir: Path = Path("/app/models")
     use_tensorrt: bool = False

@@ -184,6 +184,7 @@ make setup
 #   POSTGRES_PASSWORD=<strong-password>
 #   REDIS_PASSWORD=<strong-password>
 #   NEO4J_PASSWORD=<strong-password>
+#   S3_SECRET_KEY=<strong-password>   # MinIO object storage (clips/evidence)
 #   JWT_SECRET_KEY=<64-char-random-string>
 #   APP_SECRET_KEY=<32-char-random-string>
 nano .env

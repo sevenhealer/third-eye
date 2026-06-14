@@ -68,6 +68,9 @@ dependencies = [
     # Kafka
     "aiokafka>=0.10.0",
 
+    # Object storage (MinIO / S3-compatible) — clips, snapshots, evidence
+    "boto3>=1.34.0",
+
     # Config & validation
     "pydantic>=2.9.0",          # latest 2.13.4
     "pydantic-settings>=2.5.0",
