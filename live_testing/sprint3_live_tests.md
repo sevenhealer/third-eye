@@ -95,6 +95,16 @@ see "Deferred — accept for now" below so you don't chase the wrong target.
   hour → THEFT") — the fusion engine is Sprint 8; this sprint only emits the
   individual building-block events.
 - **Cross-camera identity continuity** — Sprint 6 (body ReID).
+- **Multi-person track churn (single camera):** when people cross, occlude,
+  or pass the frame edge, face-only tracking drops and re-creates track IDs,
+  producing duplicate/spurious PERSON_ENTERED (same person entering "twice"
+  with no exit) and phantom `unknown` entries. The event layer records this
+  faithfully — the churn is in the tracker. Fixes: Sprint 6 body ReID
+  (stable IDs) + identity-level presence (see docs/decisions/0007). For
+  Sprint 3 foundation sign-off, test SINGLE-person flows.
+- **Box disappears/reappears at the frame edge** — face partially out of
+  frame → detection drops → track coasts/re-creates. Inherent to face boxes
+  at boundaries; body tracking smooths it.
 - **Lower fps than the face pipeline** on the PCIe x1 link — use
   `--imgsz 640`; expected, not a bug.
 

@@ -19,6 +19,7 @@ Consequences.** Status is one of: Proposed, Accepted, Superseded, Deprecated.
 | [0004](0004-vector-store-pgvector-then-qdrant.md) | pgvector now → Qdrant at scale | Accepted |
 | [0005](0005-memory-graphiti-on-neo4j.md) | Graphiti temporal-KG memory | Proposed |
 | [0006](0006-agent-frameworks-pydanticai-langgraph.md) | PydanticAI + LangGraph only | Proposed |
+| [0007](0007-presence-is-identity-level.md) | Presence keyed on identity, not track | Proposed |
 
 Guiding principles (see [0001](0001-stack-architecture-review.md)): self-hosted,
 privacy-first, **ruthless about complexity** — add infrastructure only when
