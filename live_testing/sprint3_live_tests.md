@@ -154,11 +154,14 @@ The full loop you sketched — propose → review → correct → save → train
 
 # 2. REVIEW/CORRECT the auto-labels (this is the step that buys accuracy)
 .venv/bin/python scripts/review_labels.py --dataset datasets/room
-#   per frame: click a box to select it, then
-#     d = delete (reject)        c/C = cycle its class (rename)
-#     drag empty area = draw a new box   0-9 = set active class
-#     n = save+next   p = prev   u = revert frame   q = save+quit
-#   keep good boxes as-is (accept), fix wrong ones, add missed objects.
+#   sidebar lists classes with hotkeys. Per frame:
+#     click a box to select it; press 1-9/0 to set its class (or click the
+#     class row); drag empty area = new box; d = delete; n/p = nav.
+#   CARRY-FORWARD (on by default, toggle 't'): each frame starts from your
+#     CORRECTED previous frame, not the model's noisy per-frame guess — so on
+#     a static camera you label the room once and only fix what moved (the
+#     person). 'v' copies the previous frame again; 'a' resets a frame to the
+#     model's original auto-labels.
 #   Heavy corner-dragging at scale? Import datasets/room into Label Studio
 #   or CVAT (local, free) — same YOLO format — then re-export and train.
 

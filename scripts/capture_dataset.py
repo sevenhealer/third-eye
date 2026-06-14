@@ -72,8 +72,12 @@ def main() -> None:
     out = Path(args.out)
     img_dir = out / "images" / "train"
     lbl_dir = out / "labels" / "train"
+    # immutable copy of the model's original proposal — lets the reviewer
+    # reset a frame after carry-forward propagation overwrote it
+    auto_dir = out / "labels_auto" / "train"
     img_dir.mkdir(parents=True, exist_ok=True)
     lbl_dir.mkdir(parents=True, exist_ok=True)
+    auto_dir.mkdir(parents=True, exist_ok=True)
 
     detector = None
     if vocab:
@@ -135,7 +139,9 @@ def main() -> None:
                     bw, bh = (x2 - x1) / w, (y2 - y1) / h
                     lines.append(f"{det.class_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
                     labeled_boxes += 1
-                (lbl_dir / f"{stamp}.txt").write_text("\n".join(lines))
+                body = "\n".join(lines)
+                (lbl_dir / f"{stamp}.txt").write_text(body)
+                (auto_dir / f"{stamp}.txt").write_text(body)   # immutable original
 
             saved += 1
             if saved % 10 == 0:

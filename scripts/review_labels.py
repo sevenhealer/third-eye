@@ -20,7 +20,16 @@ Controls (also drawn in the sidebar):
   [ / ]            page the number->class window (datasets with >10 classes)
   d / x            delete selected    c / C   cycle class +/- (fallback)
   n / SPACE        save + next        p       save + previous
+  t                toggle carry-forward (propagate prev frame's labels)
+  v                copy previous frame's labels into this one (one-shot)
+  a                reset this frame to the model's original auto-labels
   u                revert this image  q / ESC save + quit
+
+Carry-forward: with a near-static camera, static objects barely move between
+frames, so this frame starts from your CORRECTED previous frame instead of
+the model's noisy per-frame guess — you only fix what changed. A frame is
+treated as "already reviewed" once its labels differ from the original
+auto-labels, so going back never clobbers your work.
 An empty label file (all boxes deleted) is kept — a frame with no targets is
 a valid negative sample.
 """
@@ -91,6 +100,7 @@ def main() -> None:
     root = Path(args.dataset)
     img_dir = root / "images" / args.split
     lbl_dir = root / "labels" / args.split
+    auto_dir = root / "labels_auto" / args.split   # model's original proposal
     lbl_dir.mkdir(parents=True, exist_ok=True)
     classes = load_class_names(root / "data.yaml")
     if not classes:
@@ -105,8 +115,13 @@ def main() -> None:
     st = {
         "rows": [], "sel": -1, "active": 0, "win": 0,
         "drag": None, "iw": 1, "ih": 1, "scale": 1.0, "dh": 1,
-        "rowmap": [],   # [(y_top, y_bot, class_idx)] clickable class rows
+        "rowmap": [],     # [(y_top, y_bot, class_idx)] clickable class rows
+        "carry": None,    # previous frame's corrected labels (for propagation)
+        "propagate": True,
     }
+
+    def clone(rows):
+        return [list(r) for r in rows]
 
     def to_norm(x, y):
         return x / st["scale"] / st["iw"], y / st["scale"] / st["ih"]
@@ -163,8 +178,19 @@ def main() -> None:
             continue
         ih, iw = frame.shape[:2]
         scale = min(args.max_height / ih, 1.0)
-        st.update(rows=read_labels(lbl_path), sel=-1, iw=iw, ih=ih, scale=scale,
-                  dh=int(ih * scale))
+
+        # carry-forward: if this frame is still untouched (its labels equal the
+        # model's original auto-labels) and propagation is on, start from the
+        # previous corrected frame instead of the noisy per-frame guess
+        auto_path = auto_dir / f"{img_path.stem}.txt"
+        disk_rows = read_labels(lbl_path)
+        auto_rows = read_labels(auto_path) if auto_path.exists() else None
+        unreviewed = auto_rows is not None and disk_rows == auto_rows
+        if st["propagate"] and st["carry"] is not None and unreviewed:
+            rows = clone(st["carry"])
+        else:
+            rows = disk_rows
+        st.update(rows=rows, sel=-1, iw=iw, ih=ih, scale=scale, dh=int(ih * scale))
 
         while True:
             img = cv2.resize(frame, None, fx=scale, fy=scale) if scale < 1.0 else frame.copy()
@@ -221,16 +247,22 @@ def main() -> None:
                 put(canvas, f"{tag}{classes[ci]}{mark}", (px + 22, y), txt_col, 0.5, bg=False)
                 st["rowmap"].append((y - 15, y + 6, ci))
                 y += 26
-                if y > dh - 70:
+                if y > dh - 122:   # reserve bottom strip for the footer
                     break
 
+            footer = dh - 116
             if len(classes) > 10:
                 put(canvas, f"[ ] page  (showing {win_start + 1}-"
                     f"{min(win_start + 10, len(classes))})",
-                    (px, dh - 58), (160, 200, 255), 0.42, bg=False)
-            put(canvas, "d del  drag add  n/p nav", (px, dh - 36),
+                    (px, footer), (160, 200, 255), 0.42, bg=False)
+            prop_col = (90, 255, 140) if st["propagate"] else (140, 140, 140)
+            put(canvas, f"[t] carry-forward: {'ON' if st['propagate'] else 'off'}",
+                (px, dh - 90), prop_col, 0.45, bg=False)
+            put(canvas, "v copy prev   a reset auto", (px, dh - 66),
                 (170, 170, 170), 0.42, bg=False)
-            put(canvas, "u revert   q save+quit", (px, dh - 16),
+            put(canvas, "d del  drag add  n/p nav", (px, dh - 42),
+                (170, 170, 170), 0.42, bg=False)
+            put(canvas, "u revert   q save+quit", (px, dh - 18),
                 (170, 170, 170), 0.42, bg=False)
 
             cv2.imshow(win, canvas)
@@ -239,10 +271,12 @@ def main() -> None:
                 continue
             if k in (ord("n"), ord(" ")):
                 write_labels(lbl_path, st["rows"])
+                st["carry"] = clone(st["rows"])
                 idx += 1
                 break
             if k == ord("p"):
                 write_labels(lbl_path, st["rows"])
+                st["carry"] = clone(st["rows"])
                 idx = max(0, idx - 1)
                 break
             if k in (ord("q"), 27):
@@ -267,6 +301,14 @@ def main() -> None:
                     st["win"] += 10
             elif k == ord("["):
                 st["win"] = max(0, st["win"] - 10)
+            elif k == ord("t"):
+                st["propagate"] = not st["propagate"]
+            elif k == ord("v") and st["carry"] is not None:
+                st.update(rows=clone(st["carry"]), sel=-1)
+            elif k == ord("a"):
+                ap = auto_dir / f"{img_path.stem}.txt"
+                if ap.exists():
+                    st.update(rows=read_labels(ap), sel=-1)
             elif k == ord("u"):
                 st.update(rows=read_labels(lbl_path), sel=-1)
 
