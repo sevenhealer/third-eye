@@ -292,6 +292,7 @@ async def main() -> None:
     candidates = None
     presence_rows: dict[int, int] = {}     # track_id -> zone_presence row id
     named_since: dict[int, int] = {}       # track_id -> ns timestamp first named
+    entered_label: dict[int, str] = {}     # track_id -> person at PERSON_ENTERED (for late correction)
     if args.persist_events:
         from src.alerts.delivery import AlertDelivery
         from src.alerts.engine import AlertEngine
@@ -578,10 +579,12 @@ async def main() -> None:
                         row_id = await event_store.open_presence(ev)
                         if row_id is not None:
                             presence_rows[ev.track_id] = row_id
+                        entered_label[ev.track_id] = ev.person_name
                     elif ev.event_type == "PERSON_EXITED":
                         row_id = presence_rows.pop(ev.track_id, None)
                         if row_id is not None:
                             await event_store.close_presence(row_id, ev.timestamp_ns)
+                        entered_label.pop(ev.track_id, None)
                     for trig in alert_engine.evaluate(
                         event_type=ev.event_type, camera_id=ev.camera_id,
                         zone_id=ev.zone_id, person_id=ev.person_id,
@@ -604,6 +607,26 @@ async def main() -> None:
                             "person": trig.payload.get("person"),
                             "description": trig.description,
                         })
+
+                # late resolution: a track that ENTERED as unknown (recognition
+                # hadn't caught up at entry) but is now recognized — re-attribute
+                # its entry with an append-only correction so the forensic record
+                # reflects the truth, not the moment-of-entry guess
+                for pt in present_list:
+                    if (
+                        entered_label.get(pt.track_id) == "unknown"
+                        and pt.identity_state in ("verified", "provisional")
+                        and pt.person_name not in ("unknown", "?")
+                    ):
+                        await event_store.write_identity_correction(
+                            camera_id=args.camera_id, track_id=pt.track_id,
+                            from_label="unknown", to_label=pt.person_name,
+                            since_ns=time.time_ns(), zone_id=args.zone_id,
+                            similarity=pt.similarity,
+                        )
+                        print(f"  >> IDENTITY_CORRECTED track {pt.track_id}: "
+                              f"unknown -> {pt.person_name}")
+                        entered_label[pt.track_id] = pt.person_name   # once
 
                 if frame_count % 30 == 0:
                     for draft in candidates.due():
