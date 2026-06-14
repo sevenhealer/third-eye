@@ -1,6 +1,6 @@
 # Sprint 3 Live Tests — Objects + Events + Tracking
 
-Scope (AGILE_PLAN): YOLOv9-C object detection (E03-S01), zone-level object
+Scope (AGILE_PLAN): YOLO26 object detection (E03-S01), zone-level object
 counts (E03-S03), ByteTrack tracking (E03-S04), PERSON_ENTERED /
 PERSON_EXITED events (E05-S01), webhook + WebSocket alert delivery
 (E05-S06), unknown-person enrollment candidate workflow (E02-S06).
@@ -19,9 +19,84 @@ healthy, at least one identity enrolled ("Rohan").
 > `event_type`/`zone_type` equality (tailgating, loitering) load as
 > INACTIVE until the temporal-reasoning sprint.
 
-Hardware note (Linux 3090 on PCIe x1): YOLOv9-C at 1280 will be slower
+Hardware note (Linux 3090 on PCIe x1): YOLO26 at 1280 will be slower
 than the face pipeline. If fps < 8, drop input size to 960 or 640 —
-detection quality for room-scale objects is barely affected.
+detection quality for room-scale (person-sized) objects is barely affected.
+
+---
+
+## READ FIRST — what to expect, what can go wrong, what to accept
+
+This sprint validates the **foundation**: people, zones, events, alerts,
+attribution, candidates. The intelligence built ON this (suspicious
+behavior, theft correlation, small-asset protection) is later sprints —
+see "Deferred — accept for now" below so you don't chase the wrong target.
+
+### ✅ What to EXPECT to work (this is the pass bar)
+
+- **People** detected and tracked reliably — a person is large in frame, so
+  this is the solid part. Body track survives a full rotation (unlike the
+  face-only track in Sprint 2).
+- **PERSON_ENTERED / PERSON_EXITED** persisted, debounced (one each per real
+  entry/exit, no blink events), each carrying an identity snapshot
+  (`person`, `identity_state`, `similarity`).
+- **Recognition** names enrolled people on the live feed; unknown people stay
+  `unknown` and raise `UNKNOWN_PERSON_DETECTED`.
+- **Restricted-zone alert** fires on entry to a zone seeded as `restricted`,
+  once per cooldown; **webhook + WebSocket** both deliver it within ~1s.
+- **OBJECT_ADDED / OBJECT_REMOVED** for clearly-visible, person-/box-sized
+  objects (bring a bag/laptop into view, take it away).
+- **Identity attribution:** events during an at-risk window are
+  `provisional`; a relabel/demote writes an append-only `IDENTITY_CORRECTED`
+  row; original event rows are never edited.
+- **Unknown person → pending candidate → approve → recognized live.**
+
+### ⚠ What can GO WRONG (real bugs — report these with the console output)
+
+- **`inference: CPU` on the GPU box** / `libcublasLt.so.12` errors → CUDA
+  install drift; fix per Sprint 2's CUDA section before continuing.
+- **Events not appearing in the DB** → did you pass `--persist-events`? is
+  Postgres up and the schema loaded (STEP 0)?
+- **Alert never fires** → is the zone seeded with `zone_type='restricted'`?
+  are you inside the cooldown window from a previous fire?
+- **WebSocket closes immediately (code 4401)** → token must be passed as
+  `?token=<access-token>` (browsers can't set WS headers).
+- **Webhook never arrives** → listener running on the right port? value in
+  `.env` `ALERT_WEBHOOK_URL`? (delivery failure is logged and must NOT stall
+  the pipeline — if the feed freezes on a dead webhook, that's a bug.)
+- **A name sticks to the wrong person after two people cross** for more than
+  a few seconds of clear frontal views → report (the demotion guard should
+  catch it).
+- **fps that *grows* its lag over time** (vs a constant small delay) → a
+  backlog bug; report. Constant small lag on the x1 link is normal.
+
+### 🟡 DEFERRED — accept for now (NOT failures; later sprints/efforts)
+
+- **Small items barely detected (~10%)** — shelf clutter, distant/tiny
+  objects. This is the small-object problem; the fix (SAHI tiling + a closer
+  dedicated camera + fine-tuning on a few valuables) is a separate inventory
+  effort, not this sprint. Don't treat missed small items as a failure here.
+- **Domain objects misclassified in closed-set** (almirah→fridge,
+  iPad→laptop) — COCO has no such classes; open-vocab `--vocab` / fine-tuning
+  address it later.
+- **Krishna statue detected as `person`** — known COCO limit; the identity
+  layer keeps it `unknown`, anti-spoofing rejects it in a later sprint.
+- **A pendrive / tiny critical asset is NOT trackable on the wide camera** —
+  by design no room CCTV catches a palmed 2cm object. Protecting it needs a
+  tight asset-zone + close camera + non-camera sensors (USB logging, drawer
+  contact) + forensic "who was near it" — a dedicated critical-asset track,
+  later.
+- **Suspicious-*behavior* detection** (rummaging, climbing, loitering nuance,
+  tailgating) — needs action recognition + the anomaly engine = **Sprint 8**.
+  The tailgating/loitering rules are written but load INACTIVE until then.
+- **Anomaly / "abnormal for this scene at this hour"** — behavioral
+  baselines = **Phase 4**.
+- **Full theft correlation** ("unknown + restricted + object-removed + odd
+  hour → THEFT") — the fusion engine is Sprint 8; this sprint only emits the
+  individual building-block events.
+- **Cross-camera identity continuity** — Sprint 6 (body ReID).
+- **Lower fps than the face pipeline** on the PCIe x1 link — use
+  `--imgsz 640`; expected, not a bug.
 
 ---
 
@@ -184,7 +259,7 @@ satisfy the detection criteria; 3c is the production-quality follow-up.)
 
 ---
 
-## STEP 4 — Zones + PERSON_ENTERED / PERSON_EXITED *(needs build #2)*
+## STEP 4 — Zones + PERSON_ENTERED / PERSON_EXITED
 
 Seed the zones (one-time):
 
@@ -225,7 +300,7 @@ with identity_state present on every event.
 
 ---
 
-## STEP 5 — Zone object counts *(needs build #3)*
+## STEP 5 — Zone object counts
 
 While STEP 3 or 4 is running:
 
@@ -257,7 +332,7 @@ returns 401.
 
 ---
 
-## STEP 7 — Alert rules → alerts rows *(needs build #4)*
+## STEP 7 — Alert rules → alerts rows
 
 `doorway` is seeded as `restricted`. Re-run STEP 4's command with
 `--zone-id doorway`, walk into frame.
@@ -285,7 +360,7 @@ status, audit_log records both actions.
 
 ---
 
-## STEP 8 — Webhook + WebSocket delivery *(needs build #5)*
+## STEP 8 — Webhook + WebSocket delivery
 
 Terminal A — webhook listener (script provided with the build):
 
@@ -317,7 +392,7 @@ retried, and never blocks the pipeline.
 
 ---
 
-## STEP 9 — Identity attribution under uncertainty *(needs build #2)*
+## STEP 9 — Identity attribution under uncertainty
 
 The Sprint-2 finding, now enforced: events must never launder a guess
 into a fact.
@@ -345,7 +420,7 @@ corrections appear as new records, never edits.
 
 ---
 
-## STEP 10 — Unknown-person enrollment candidates *(needs build #6)*
+## STEP 10 — Unknown-person enrollment candidates
 
 Have the unenrolled person stand in view ~10 s with their face visible.
 
@@ -405,12 +480,10 @@ DELETE FROM persons WHERE display_name = 'Guest One';"
 
 ## Expected misses — do NOT count as failures
 
-- Krishna statue detected as `person` by COCO YOLO (known model limit;
-  identity layer keeps it `unknown`, anti-spoofing later rejects it)
-- In closed-set mode (3a), domain objects outside COCO's 80 are missed or
-  misclassified (almirah→fridge, iPad→laptop) — this is expected; 3b
-  (open-vocab) and 3c (fine-tuning) are the fixes, not a YOLO-version bug
-- Open-vocab (3b) runs slower per frame — it's for correctness, not speed
-- Cross-camera identity continuity — Sprint 6
-- Action recognition ("what are they doing") — later sprint
-- fps lower than the face pipeline on the x1 link; use --det-size 640
+See the full **"DEFERRED — accept for now"** list in the READ FIRST section
+at the top of this guide. In short: small-item/inventory detection,
+domain-object misclassification in closed-set, the statue-as-person,
+tiny-critical-asset (pendrive) protection, suspicious-behavior/anomaly
+detection, theft correlation, cross-camera identity, and lower fps on the
+PCIe x1 link are all expected and handled by later sprints/efforts — not
+failures of this foundation sprint.
