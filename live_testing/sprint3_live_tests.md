@@ -291,12 +291,14 @@ Run the face runner with event persistence:
   --recognize --camera-id cam0 --zone-id bedroom --persist-events
 ```
 
-Walk out of frame (>6 s), walk back in. Then check:
+Walk out of frame (>6 s), walk back in. Then check (times are stored in UTC —
+the `AT TIME ZONE` converts to local; change the zone to yours):
 
 ```bash
 sudo docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c "
 SELECT event_type, zone_id, payload->>'person' AS person,
-       payload->>'identity_state' AS identity_state, event_time
+       payload->>'identity_state' AS identity_state,
+       event_time AT TIME ZONE 'Asia/Kolkata' AS local_time
 FROM system_events ORDER BY event_time DESC LIMIT 10;"
 ```
 
@@ -304,6 +306,11 @@ FROM system_events ORDER BY event_time DESC LIMIT 10;"
 - `PERSON_ENTERED` when your track is confirmed in the zone,
   `PERSON_EXITED` after you leave (grace period, no blink events)
 - `person` = `Rohan` with `identity_state = verified` for clean tracks
+- On re-entry you'll often see a fresh `PERSON_ENTERED` with `person=unknown`
+  (recognition hasn't caught up at the instant of entry) followed seconds
+  later by an `IDENTITY_CORRECTED` row (unknown → Rohan). The entry row stays
+  unknown on purpose (append-only); the correction re-attributes it. Console
+  prints `>> IDENTITY_CORRECTED track N: unknown -> Rohan`.
 - An event fired while your track was at-risk (right after a gap return /
   crossing) carries `identity_state = provisional`
 - `zone_presence` rows show your entry/exit times with `is_unknown=false`
