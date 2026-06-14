@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # ── Databases ─────────────────────────────────────────────────────────────
     database_url: str
+    db_echo: bool = False   # SQLAlchemy SQL logging — very noisy; opt-in only
     timescale_url: str
     redis_url: str = "redis://redis:6379/0"
     redis_password: str = ""

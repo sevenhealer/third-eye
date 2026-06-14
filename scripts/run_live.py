@@ -317,6 +317,8 @@ async def main() -> None:
             camera_id=args.camera_id, zone_id=args.zone_id,
             enter_grace_frames=5,
             exit_grace_frames=max(int(args.fps * 3), 30),
+            # ~3s for recognition to resolve before declaring a genuine stranger
+            unknown_grace_frames=max(int(args.fps * 3), 60),
         )
         alert_engine = AlertEngine(
             ROOT / "configs" / "alerting" / "alert_rules.yaml", zone_types
@@ -448,7 +450,9 @@ async def main() -> None:
         # tell camera stalls apart from slow inference: if the gap dwarfs the
         # last inference time, the source delivered nothing during it
         gap = now - last_frame_t
-        if last_frame_t and gap > 0.3:
+        # skip the first few frames: the first inference includes one-time
+        # model/CUDA warmup (~2s) and isn't a real stall
+        if last_frame_t and gap > 0.3 and frame_count > 3:
             cause = (
                 "processing (inference slow)"
                 if last_infer_ms / 1000.0 > gap * 0.7

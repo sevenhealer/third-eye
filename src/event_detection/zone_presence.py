@@ -35,8 +35,10 @@ class PresenceEvent:
 class _TrackState:
     seen_frames: int = 0              # consecutive frames present (pre-entry)
     miss_frames: int = 0              # consecutive frames absent (post-entry)
+    frames_since_entry: int = 0       # frames present since ENTERED fired
     entered: bool = False
     unknown_reported: bool = False
+    ever_known: bool = False          # was the track ever recognized?
     last: PresentTrack = field(default_factory=lambda: PresentTrack(track_id=-1))
 
 
@@ -49,11 +51,13 @@ class ZonePresenceMonitor:
     before EXITED fires (kills blink-exits during occlusion — the tracker
     already coasts, this is a second layer for the event stream).
 
-    UNKNOWN_PERSON_DETECTED fires once per entered track that is not
-    recognized at entry time — the alert layer decides what that means
-    per zone type. Events carry the identity snapshot current at fire time;
-    later corrections are appended by the caller (IDENTITY_CORRECTED), never
-    rewritten here.
+    UNKNOWN_PERSON_DETECTED fires once per track that STAYS unrecognized for
+    `unknown_grace_frames` after entering — not at entry time. This gives
+    recognition a chance to catch up so an enrolled person who simply hasn't
+    resolved yet (the first second or two) does NOT raise a false stranger
+    event; only a genuinely persistent unknown does. Events carry the identity
+    snapshot at fire time; later corrections are appended by the caller
+    (IDENTITY_CORRECTED), never rewritten here.
     """
 
     def __init__(
@@ -62,11 +66,13 @@ class ZonePresenceMonitor:
         zone_id: str,
         enter_grace_frames: int = 5,
         exit_grace_frames: int = 45,
+        unknown_grace_frames: int = 60,
     ) -> None:
         self.camera_id = camera_id
         self.zone_id = zone_id
         self.enter_grace_frames = enter_grace_frames
         self.exit_grace_frames = exit_grace_frames
+        self.unknown_grace_frames = unknown_grace_frames
         self._tracks: dict[int, _TrackState] = {}
 
     def _event(self, event_type: str, t: PresentTrack, ts_ns: int) -> PresenceEvent:
@@ -94,14 +100,25 @@ class ZonePresenceMonitor:
             st = self._tracks.setdefault(p.track_id, _TrackState())
             st.last = p
             st.miss_frames = 0
+            if p.identity_state != "unknown":
+                st.ever_known = True
             if not st.entered:
                 st.seen_frames += 1
                 if st.seen_frames >= self.enter_grace_frames:
                     st.entered = True
                     events.append(self._event("PERSON_ENTERED", p, ts))
-                    if p.identity_state == "unknown" and not st.unknown_reported:
-                        st.unknown_reported = True
-                        events.append(self._event("UNKNOWN_PERSON_DETECTED", p, ts))
+            else:
+                # already entered: fire UNKNOWN only if it STAYS unknown past
+                # the grace (recognition didn't catch up → genuine stranger)
+                st.frames_since_entry += 1
+                if (
+                    not st.unknown_reported
+                    and not st.ever_known
+                    and p.identity_state == "unknown"
+                    and st.frames_since_entry >= self.unknown_grace_frames
+                ):
+                    st.unknown_reported = True
+                    events.append(self._event("UNKNOWN_PERSON_DETECTED", p, ts))
 
         for tid, st in list(self._tracks.items()):
             if tid in present_ids:

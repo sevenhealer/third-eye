@@ -155,6 +155,10 @@ class EventStore:
             severity="LOW",
             confidence=similarity,
             payload={
+                # "person" mirrors the resolved identity so the standard
+                # payload->>'person' query shows it; from/to carry the change
+                "person": to_label,
+                "identity_state": "corrected",
                 "from": from_label,
                 "to": to_label,
                 "applies_from": _ts(since_ns).isoformat(),
