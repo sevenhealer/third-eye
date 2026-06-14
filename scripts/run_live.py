@@ -573,7 +573,7 @@ async def main() -> None:
             try:
                 for ev in presence.update(present_list):
                     print(f"  >> {ev.event_type}  {ev.person_name} "
-                          f"[{ev.identity_state}]  zone={ev.zone_id}")
+                          f"[{ev.identity_state}]  zone={ev.zone_id}  track={ev.track_id}")
                     await event_store.write_presence_event(ev)
                     if ev.event_type == "PERSON_ENTERED":
                         row_id = await event_store.open_presence(ev)
@@ -610,23 +610,38 @@ async def main() -> None:
 
                 # late resolution: a track that ENTERED as unknown (recognition
                 # hadn't caught up at entry) but is now recognized — re-attribute
-                # its entry with an append-only correction so the forensic record
-                # reflects the truth, not the moment-of-entry guess
+                # its entry with an append-only correction AND patch its open
+                # presence row, so the forensic record reflects the truth.
                 for pt in present_list:
-                    if (
-                        entered_label.get(pt.track_id) == "unknown"
-                        and pt.identity_state in ("verified", "provisional")
+                    recognized = (
+                        pt.identity_state in ("verified", "provisional")
                         and pt.person_name not in ("unknown", "?")
-                    ):
+                    )
+                    if not recognized:
+                        continue
+                    if entered_label.get(pt.track_id) == "unknown":
                         await event_store.write_identity_correction(
                             camera_id=args.camera_id, track_id=pt.track_id,
                             from_label="unknown", to_label=pt.person_name,
                             since_ns=time.time_ns(), zone_id=args.zone_id,
                             similarity=pt.similarity,
                         )
+                        row_id = presence_rows.get(pt.track_id)
+                        if row_id is not None:
+                            await event_store.resolve_presence_identity(row_id, pt.person_id)
                         print(f"  >> IDENTITY_CORRECTED track {pt.track_id}: "
                               f"unknown -> {pt.person_name}")
                         entered_label[pt.track_id] = pt.person_name   # once
+                    elif (
+                        pt.track_id in presence_rows
+                        and pt.track_id not in entered_label
+                    ):
+                        # diagnostic: this track is recognized and has an open
+                        # entry, but no record of how it entered — means the
+                        # entering track had a DIFFERENT id (face-track ID
+                        # instability). Logs so we can confirm the hypothesis.
+                        print(f"  .. [debug] track {pt.track_id} = {pt.person_name} "
+                              f"has open entry but no entered_label (ID changed mid-presence?)")
 
                 if frame_count % 30 == 0:
                     for draft in candidates.due():

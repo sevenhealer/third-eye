@@ -116,6 +116,20 @@ class EventStore:
             )
             await session.commit()
 
+    async def resolve_presence_identity(self, presence_id: int, person_id: str | None) -> None:
+        """Patch an open zone_presence row once a track's identity resolves —
+        the row was opened as unknown before recognition caught up."""
+        async with get_db_session() as session:
+            await session.execute(
+                text("""
+                    UPDATE zone_presence
+                    SET person_id = :pid, is_unknown = false
+                    WHERE id = :id
+                """),
+                {"pid": person_id, "id": presence_id},
+            )
+            await session.commit()
+
     async def write_identity_correction(
         self,
         *,
