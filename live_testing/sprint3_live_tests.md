@@ -118,6 +118,19 @@ sudo docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c "\dt" \
 
 **Expected:** all six tables listed.
 
+**If `system_events` / `object_counts` are MISSING** (the time-series schema
+only runs on first-ever container init, and an older version aborted on the
+missing timescaledb extension), apply the corrected schema to the running DB:
+
+```bash
+sudo docker exec -i third-eye-postgres-1 psql -U thirdeye -d thirdeye \
+  < infrastructure/timescaledb/schema.sql
+```
+
+You'll see `NOTICE: timescaledb unavailable — using plain tables` — that's
+expected and fine (the pgvector image has no timescaledb; the tables work as
+plain PostgreSQL). Re-run the verify; all six should now appear.
+
 ---
 
 ## STEP 1 — Unit tests for the object/event layer
