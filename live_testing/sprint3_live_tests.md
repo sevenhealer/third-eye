@@ -284,14 +284,17 @@ satisfy the detection criteria; 3c is the production-quality follow-up.)
 
 ## STEP 4 — Zones + PERSON_ENTERED / PERSON_EXITED
 
-Seed the zones (one-time):
+The runner now self-registers its `--camera-id` and `--zone-id` at startup
+(needed so `zone_presence`'s foreign keys are satisfied — otherwise the first
+PERSON_ENTERED's presence insert FK-violates and silently aborts event
+handling). So no manual seeding is required for a general zone. You only need
+to seed a zone explicitly to make it **restricted** (for the alert test):
 
 ```bash
 sudo docker exec third-eye-postgres-1 psql -U thirdeye -d thirdeye -c "
 INSERT INTO zones (zone_id, display_name, zone_type) VALUES
-  ('bedroom',  'Bedroom',  'general'),
   ('doorway',  'Doorway',  'restricted')
-ON CONFLICT (zone_id) DO NOTHING;"
+ON CONFLICT (zone_id) DO UPDATE SET zone_type = 'restricted';"
 ```
 
 Run the face runner with event persistence:
