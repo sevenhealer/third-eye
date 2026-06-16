@@ -329,7 +329,11 @@ async def main() -> None:
         if store.is_enabled:
             store.ensure_bucket()
         candidates = CandidateCapture(camera_id=args.camera_id, object_store=store)
-        print(f"  object storage: {'on' if store.is_enabled else 'off (no S3 endpoint)'}")
+        if store.is_enabled:
+            print("  object storage: on — unknown face crops saved to MinIO")
+        else:
+            print("  object storage: OFF — candidates captured WITHOUT photos "
+                  "(set S3_ENDPOINT_URL + `pip install boto3` to enable crops)")
         zone_type = zone_types.get(args.zone_id, "general (zone not in DB!)")
         print(f"Persistence: ON — zone '{args.zone_id}' type={zone_type}, "
               f"webhook={'set' if get_settings().alert_webhook_url else 'none'}")

@@ -57,7 +57,13 @@ class ObjectStore:
         if not endpoint_url:
             return
         if not _BOTO_AVAILABLE:
-            raise StorageError("boto3 not installed — run: pip install boto3")
+            # optional dependency missing — disable storage gracefully instead
+            # of crashing the pipeline; clip/evidence saving is best-effort
+            logger.warning(
+                "object_store_disabled_no_boto3",
+                hint="pip install boto3 to enable clip/snapshot/evidence storage",
+            )
+            return
         # path-style addressing is required for MinIO (no virtual-host buckets)
         self._client = boto3.client(
             "s3",
