@@ -6,7 +6,7 @@ APP_SERVICE = api
 help:
 	@echo "Third-Eye Visual Intelligence Platform"
 	@echo ""
-	@echo "  make setup        Copy .env.example → .env (first time)"
+	@echo "  make setup        Generate/top-up .env with strong random secrets"
 	@echo "  make install      Install deps into .venv (Mac / CPU dev)"
 	@echo "  make install-gpu  Install deps into .venv (Linux + NVIDIA GPU)"
 	@echo "  make up           Start all services"
@@ -22,7 +22,7 @@ help:
 	@echo "  make models-pull  Pull Ollama models (mistral + llava)"
 
 setup:
-	@test -f .env || (cp .env.example .env && echo "Created .env — edit it before running 'make up'")
+	@python3 scripts/setup_env.py
 
 check-env:
 	@test -f .env || (echo "ERROR: .env not found. Run 'make setup' first." && exit 1)

@@ -112,12 +112,19 @@ see "Deferred — accept for now" below so you don't chase the wrong target.
 
 ## STEP 0 — Infrastructure
 
+Ensure `.env` has all secrets (idempotent — adds any missing keys like
+`S3_SECRET_KEY` without touching existing ones):
+
 ```bash
-docker compose up -d postgres redis
+make setup                          # or: python3 scripts/setup_env.py
+docker compose up -d postgres redis minio
 docker compose ps
 ```
 
-**Expected:** both healthy. The TimescaleDB schema (system_events,
+To use the unknown-person face-crop storage (STEP 10), also install boto3:
+`.venv/bin/pip install boto3` (or `pip install -e .`).
+
+**Expected:** all three healthy. The TimescaleDB schema (system_events,
 object_counts) is loaded into the same postgres container via
 `infrastructure/timescaledb/schema.sql` — verify:
 

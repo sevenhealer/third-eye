@@ -177,23 +177,20 @@ docker compose version   # should be 2.x
 git clone https://github.com/sevenhealer/third-eye.git
 cd third-eye
 
-# Create your .env from the template
+# Generate .env with strong RANDOM secrets (postgres, redis, neo4j, JWT,
+# MinIO, encryption key…). Idempotent: re-running only adds missing keys and
+# never overwrites existing ones, so it's safe to run after pulling updates.
 make setup
-
-# Edit .env — at minimum set:
-#   POSTGRES_PASSWORD=<strong-password>
-#   REDIS_PASSWORD=<strong-password>
-#   NEO4J_PASSWORD=<strong-password>
-#   S3_SECRET_KEY=<strong-password>   # MinIO object storage (clips/evidence)
-#   JWT_SECRET_KEY=<64-char-random-string>
-#   APP_SECRET_KEY=<32-char-random-string>
-nano .env
 ```
+
+> Production: review `.env` and rotate any secret you want to control yourself;
+> all values `make setup` writes are cryptographically random. To point at an
+> external S3 instead of the bundled MinIO, edit `S3_ENDPOINT_URL`/`S3_*`.
 
 ### 3. Start all services
 
 ```bash
-make up
+make up        # = docker compose up -d  (one command, after `make setup`)
 ```
 
 This starts: PostgreSQL + pgvector, TimescaleDB, Redis, Neo4j, Kafka, Ollama, all pipeline services, FastAPI, Prometheus, and Grafana.
