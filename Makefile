@@ -90,7 +90,7 @@ db-migrate:
 
 neo4j-init:
 	$(COMPOSE) exec neo4j cypher-shell -u neo4j -p "${NEO4J_PASSWORD}" \
-		--file /var/lib/neo4j/import/init.cypher
+		--file /init/init.cypher
 
 enroll:
 	@echo "Usage: make enroll NAME='John Doe' ROLE='engineer'"

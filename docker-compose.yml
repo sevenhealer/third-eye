@@ -120,7 +120,7 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
-      - ./infrastructure/neo4j/init.cypher:/var/lib/neo4j/import/init.cypher
+      - ./infrastructure/neo4j/init.cypher:/init/init.cypher:ro
     ports:
       - "127.0.0.1:7474:7474"
       - "127.0.0.1:7687:7687"
