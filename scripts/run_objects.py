@@ -105,7 +105,17 @@ async def main() -> None:
     vocab = [c.strip() for c in args.vocab.split(",") if c.strip()] or None
     # YOLO-World needs a much lower floor than closed YOLO — see --conf help
     conf = args.conf if args.conf is not None else (0.05 if vocab else 0.45)
-    detector = YOLODetector(model_name=args.model, conf_threshold=conf,
+
+    # Detector floor vs tracker start-threshold must differ, or there's no
+    # hysteresis band: a closed-set object sitting right at `conf` (e.g. a
+    # backpack measured at 0.42-0.46 against a 0.45 cutoff) gets dropped and
+    # recreated every single frame its confidence dips a hair below `conf`,
+    # instead of coasting on the existing track like run_live.py's faces do
+    # (det-thresh start / 0.30 sustain floor). Open-vocab already runs the
+    # detector at its natural floor (`conf`, e.g. 0.05) with its own 0.25
+    # start gate below, so it's left alone.
+    detect_floor = conf if vocab else max(conf - 0.20, 0.1)
+    detector = YOLODetector(model_name=args.model, conf_threshold=detect_floor,
                             imgsz=args.imgsz, device=device, vocab=vocab)
     try:
         detector.load()
@@ -114,9 +124,15 @@ async def main() -> None:
         sys.exit(1)
 
     # tracker's high band must sit at/above the detector floor; in open-vocab
-    # mode conf is tiny, so keep a sane 0.25 start-track gate either way
-    tracker = ByteTracker(max_age=90, min_hits=3, iou_threshold=0.3,
-                          high_threshold=max(conf, 0.25), low_threshold=conf)
+    # mode conf is tiny, so keep a sane 0.25 start-track gate either way.
+    # max_age=90 (~6s @15fps) was too short for static furniture: a person
+    # walking in front of a chair for longer than that gets it deleted and
+    # re-created as a brand-new track ID on reappearance (no appearance-based
+    # ReID for objects yet — that's a later sprint). 300 (~20s) gives static
+    # objects more room to survive a normal occlusion without fixing the
+    # underlying gap.
+    tracker = ByteTracker(max_age=300, min_hits=3, iou_threshold=0.3,
+                          high_threshold=max(conf, 0.25), low_threshold=detect_floor)
     tracker.reset()
     zone_detector = ZoneEventDetector(removal_grace_frames=int(args.fps * 5) or 75)
     counter = ObjectCountAggregator(args.camera_id, args.zone_id, bucket_seconds=10)
