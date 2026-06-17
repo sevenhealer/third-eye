@@ -34,6 +34,17 @@ models/custom/*.pth
 !models/tensorrt/.gitkeep
 !models/custom/.gitkeep
 
+# Auto-downloaded weights that land at repo root (e.g. `YOLO('yolo26m.pt')`
+# downloads to cwd) and weight caches outside models/ (e.g. CLIP for YOLO-World)
+/*.pt
+/*.pth
+/*.onnx
+/weights/
+
+# Captured/auto-labeled training datasets (scripts/capture_dataset.py) — large
+# binary image data, not source; track with DVC if needed, not git
+/datasets/
+
 # Data (track with DVC)
 data/raw/
 data/processed/
