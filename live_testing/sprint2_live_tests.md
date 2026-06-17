@@ -354,6 +354,19 @@ with your enrolled name.
   re-checks suffice (~2-4 s); with no risk event it takes 4 consecutive
   clear-view failures (~8+ s safety net for undetected swaps). Turned-away
   or blurred faces never count toward demotion
+- **Confirmed live (2026-06-17):** holding the camera and moving it (very
+  close to your own face / extreme angle) degraded the embedding enough to
+  trip the 4-clear-view demotion — console printed
+  `! track N demoted: Rohan -> unknown (4 clear views failed to verify)`.
+  It silently re-resolved to `Rohan` again once the view normalized, but the
+  recovery took much longer (~1 min) than the ~8 s demotion window — re-checks
+  on an unnamed track only run on the same `RECHECK_FRAMES` cadence, so
+  recovery time scales with however long the degraded view lasts, not a
+  fixed budget. Not a bug. It does create one spurious enrollment candidate
+  for the gap (see Sprint 3 STEP 10) — reviewing it shows a high-confidence
+  "looks like Rohan" merge suggestion rather than a fake new person, so it's
+  harmless, just review noise. If recovery never happens with a clearly
+  visible, normal-angle face, THAT would be a real bug — report it.
 
 **Pass:** you are named whenever your face is clearly visible; the statue
 is never named.

@@ -409,6 +409,18 @@ Terminal A — webhook listener (script provided with the build):
 # and set in .env:  ALERT_WEBHOOK_URL=http://127.0.0.1:9000/hook
 ```
 
+> **Port conflict on the Linux box:** MinIO already publishes host port
+> `9000` (and `9001`) — `webhook_listener.py --port 9000` fails with
+> `Address already in use`. Use a free port instead, e.g. `--port 9100` +
+> `ALERT_WEBHOOK_URL=http://127.0.0.1:9100/hook`.
+>
+> **Silent log file:** if you redirect the listener's stdout to a file
+> (`> listener.log 2>&1 &`), Python block-buffers stdout when it isn't a
+> TTY — the file can stay empty for a while even though requests ARE being
+> received and answered. Don't read an empty log as "nothing arrived";
+> confirm with `curl -X POST http://127.0.0.1:9100/hook -d '{}'` (expect
+> `ok`) or check the sender's own log for `alert_webhook_delivered`.
+
 Terminal B — WebSocket subscriber (needs `pip install websockets`; uses the
 $TOKEN from STEP 6 — browsers can't set headers on WS, so auth is a query
 param):
@@ -429,6 +441,44 @@ Trigger the STEP 7 alert again (after cooldown).
 **Expected:** both terminals receive the alert JSON within ~1 s of the
 zone entry; webhook delivery failure (stop the listener) is logged and
 retried, and never blocks the pipeline.
+
+### STEP 8b — WebSocket/Redis bridge smoke test (no camera, no waiting for a real alert)
+
+Faster way to confirm the WS endpoint and the `thirdeye:alerts` Redis
+pub/sub bridge work, without needing a live alert to fire:
+
+```bash
+.venv/bin/python - "$TOKEN" <<'EOF'
+import asyncio, json, sys, time
+import websockets
+
+async def main():
+    token = sys.argv[1]
+    url = f"ws://127.0.0.1:8000/api/v1/alerts/ws?token={token}"
+    async with websockets.connect(url) as ws:
+        print("connected, waiting for test publish...")
+
+        async def publisher():
+            await asyncio.sleep(1)
+            from redis.asyncio import Redis
+            r = Redis(host="localhost", port=6379, password="redispass123")
+            await r.publish("thirdeye:alerts", json.dumps({"event_type": "WS_SMOKE_TEST", "ts": time.time()}))
+            await r.aclose()
+
+        asyncio.create_task(publisher())
+        msg = await asyncio.wait_for(ws.recv(), timeout=5)
+        print("received:", msg)
+
+asyncio.run(main())
+EOF
+```
+
+**Expected:** `received: {"event_type": "WS_SMOKE_TEST", ...}` within the
+5 s timeout. If the connection closes immediately instead
+(`ConnectionClosedError: no close frame received or sent`), check the API
+process's own log — it's almost always `REDIS_URL` resolving to the
+docker-internal hostname (see Sprint 1 STEP 1b) in a stale, already-running
+uvicorn process.
 
 ---
 
@@ -497,12 +547,31 @@ curl -s -X POST "http://127.0.0.1:8000/api/v1/identities/candidates/<id>/approve
   -d '{"person_id": "<existing-person-uuid>"}' | python3 -m json.tool
 ```
 
+**(c) REJECT** — not a real distinct person (false-positive face, or not
+worth enrolling):
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/api/v1/identities/candidates/<id>/reject" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
 **Pass:** (a) creates the person + gallery rows (audit `CANDIDATE_APPROVED`)
 and the live feed names them within one re-check cycle; (b) adds an embedding
 to the existing person's gallery (audit `CANDIDATE_MERGED`), no duplicate
-person; rejecting stores `rejected` and never touches `persons`; saved face
-crops are viewable in MinIO; distinct unknowns are separate candidates while
-the same unknown seen twice is merged.
+person; (c) sets `status = rejected` (audit `CANDIDATE_REJECTED`) and never
+touches `persons`; saved face crops are viewable in MinIO; distinct unknowns
+are separate candidates while the same unknown seen twice is merged.
+
+> **Confirmed live (2026-06-17):** a static face-like object in frame (a
+> Krishna statue) gets tracked and eventually produces its own pending
+> candidate — but with very low `suggested_similarity` (~0.04–0.06) against
+> every enrolled person, since it isn't really anyone's face. That's the
+> correct signal to `reject` it. True anti-spoofing/liveness rejection of
+> non-human faces is a later sprint; for now the candidate queue is where a
+> human operator catches it. A brief close-up/extreme-angle dip on an
+> already-enrolled person (see Sprint 2 STEP 9 demotion note) also produces
+> a candidate — but with a HIGH suggested similarity to themselves, which is
+> the cue to `(b) merge` instead of rejecting or creating a duplicate.
 
 ---
 

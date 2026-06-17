@@ -57,6 +57,31 @@ grep -E "POSTGRES_PASSWORD|REDIS_PASSWORD|NEO4J_PASSWORD|JWT_SECRET_KEY|APP_SECR
 
 ---
 
+## STEP 1b — Host-reachable endpoints (real bug found in Sprint 3 testing)
+
+`scripts/run_live.py`, `scripts/run_objects.py`, and the API (run via
+`.venv/bin/uvicorn`, not the dockerized `api` service) all run directly on
+the host — they are NOT inside the docker-compose network. Any `.env` URL
+that still points at a compose *service name* (`redis`, `minio`, `postgres`,
+`neo4j`) will fail from the host with `Temporary failure in name
+resolution`, since those hostnames only resolve inside the docker network.
+
+```bash
+grep -E "DATABASE_URL|REDIS_URL|S3_ENDPOINT_URL" .env
+```
+
+**Expected:** all three use `localhost` (or `127.0.0.1`), never
+`redis`/`minio`/`postgres` as the host. `DATABASE_URL` is usually already
+correct; `REDIS_URL` and `S3_ENDPOINT_URL` default to the docker-internal
+form in `src/core/config.py` and need the same localhost override in `.env`.
+
+**Gotcha:** pydantic settings are read once at process startup, not
+live-reloaded. If a long-running process (uvicorn, `run_live.py`) was
+already running when you fix `.env`, it's still using the stale value —
+restart it after any `.env` edit that affects connection URLs.
+
+---
+
 ## STEP 2 — Start infrastructure services
 
 ```bash
@@ -81,6 +106,20 @@ docker-compose ps
 | third-eye-prometheus-1 | Up |
 | third-eye-grafana-1 | Up |
 | third-eye-mlflow-1 | Up |
+
+> **Real bug found and fixed (2026-06-17):** the official Neo4j image's
+> entrypoint runs `chown -R` on its entire `NEO4J_HOME` (`/var/lib/neo4j`)
+> whenever it starts as root (the default). `init.cypher` used to be
+> bind-mounted directly under that tree
+> (`/var/lib/neo4j/import/init.cypher`), so every `docker compose up neo4j`
+> silently rewrote the **host** file's owner to `7474:7474` and its mode to
+> `700` — locking the repo owner out of their own tracked file (`git diff`
+> failed with `Permission denied`). Fixed by relocating the mount to
+> `/init/init.cypher` (outside `NEO4J_HOME`, so the chown sweep never
+> touches it) and updating `make neo4j-init` to match. If `git status` ever
+> shows `infrastructure/neo4j/init.cypher` as modified/permission-denied
+> after starting neo4j, something reintroduced a mount under
+> `/var/lib/neo4j/`.
 
 ---
 
