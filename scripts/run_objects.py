@@ -142,9 +142,12 @@ async def main() -> None:
     counter = ObjectCountAggregator(args.camera_id, args.zone_id, bucket_seconds=10)
 
     event_store = None
+    stm = None
     if args.persist_events:
         from src.event_detection.event_store import EventStore
+        from src.memory.short_term import get_short_term_memory
         event_store = EventStore()
+        stm = get_short_term_memory()
         print("Persistence: ON (system_events + object_counts)")
 
     try:
@@ -155,7 +158,11 @@ async def main() -> None:
     camera = CameraReader(source=source)
     if not camera.open():
         print(f"ERROR: Cannot open camera '{source}'")
+        if stm is not None:
+            await stm.set_camera_status(args.camera_id, "offline")
         sys.exit(1)
+    if stm is not None:
+        await stm.set_camera_status(args.camera_id, "online")
 
     print("=" * 62)
     mode = f"open-vocab ({len(vocab)} classes)" if vocab else "closed-set (COCO)"
@@ -186,6 +193,10 @@ async def main() -> None:
     async def process_frame(frame, meta) -> None:
         nonlocal frame_count, last_infer_ms, fps_ema, last_frame_t, last_flush
         frame_count += 1
+
+        # refresh camera:{id}:status TTL periodically (120s TTL) while healthy
+        if stm is not None and frame_count % 150 == 0:
+            await stm.set_camera_status(args.camera_id, "online")
 
         now = time.monotonic()
         if last_frame_t:
@@ -224,6 +235,9 @@ async def main() -> None:
         for t in tracked:
             class_counts[t.class_name] = class_counts.get(t.class_name, 0) + 1
         counter.observe(class_counts, time.time())
+        if stm is not None:
+            for class_name, count in class_counts.items():
+                await stm.set_zone_object_count(args.zone_id, class_name, count)
         if event_store is not None and time.time() - last_flush >= 5.0:
             last_flush = time.time()
             buckets = counter.pop_closed(time.time())

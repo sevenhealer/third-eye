@@ -295,6 +295,7 @@ async def main() -> None:
     alert_engine = None
     delivery = None
     candidates = None
+    stm = None
     presence_rows: dict[int, int] = {}     # track_id -> zone_presence row id
     named_since: dict[int, int] = {}       # track_id -> ns timestamp first named
     # track_id -> open presence row_id for entries recorded as unknown, still
@@ -308,8 +309,10 @@ async def main() -> None:
         from src.event_detection.event_store import EventStore
         from src.event_detection.zone_presence import PresentTrack, ZonePresenceMonitor
         from src.face_recognition.candidates import CandidateCapture
+        from src.memory.short_term import get_short_term_memory
 
         event_store = EventStore()
+        stm = get_short_term_memory()
         # self-register zone + camera so zone_presence FKs are satisfied
         # (otherwise the first PERSON_ENTERED's presence insert FK-violates and
         # aborts event handling — including the identity correction — each frame)
@@ -352,7 +355,11 @@ async def main() -> None:
         if ON_MAC:
             print("  macOS: check System Settings → Privacy & Security → Camera")
             print("         and grant access to Terminal (or your IDE).")
+        if stm is not None:
+            await stm.set_camera_status(args.camera_id, "offline")
         sys.exit(1)
+    if stm is not None:
+        await stm.set_camera_status(args.camera_id, "online")
 
     win_name = "third-eye | live  (q to quit)"
     if args.show:
@@ -397,6 +404,7 @@ async def main() -> None:
         label, sim, checked, misses, pid = track_labels.get(
             t.track_id, ("", 0.0, -999, 0, None)
         )
+        old_pid = pid
         named = label not in ("", "unknown", "?")
         due = label == "" or force or frame_count - checked >= RECHECK_FRAMES
         if due and (good_view or not named):
@@ -425,6 +433,14 @@ async def main() -> None:
                     else 0.7 * sim + 0.3 * m.similarity
                 label, misses, pid = new_name, 0, m.person_id
                 at_risk.pop(t.track_id, None)   # verified: track is clean again
+                if stm is not None:
+                    # re-add every accept cycle (not just on change) to keep
+                    # the zone-occupancy TTL alive for the whole presence
+                    if old_pid and old_pid != pid:
+                        await stm.remove_zone_occupant(args.zone_id, old_pid)
+                    await stm.add_zone_occupant(args.zone_id, pid)
+                    await stm.set_identity_location(pid, args.zone_id, track_id=str(t.track_id))
+                    await stm.register_name_lookup(new_name, pid)
             elif named:
                 # two-tier demotion: failures only count on good views (the
                 # gate above), so these are clear faces NOT matching the name.
@@ -450,6 +466,8 @@ async def main() -> None:
                         "unknown", (m.similarity if m else 0.0), 0, None
                     )
                     at_risk.pop(t.track_id, None)
+                    if stm is not None and old_pid:
+                        await stm.remove_zone_occupant(args.zone_id, old_pid)
             else:
                 label = "?" if (m is not None and m.decision == "ambiguous") else "unknown"
                 sim, misses, pid = (m.similarity if m else 0.0), 0, None
@@ -459,6 +477,11 @@ async def main() -> None:
     async def process_frame(frame, meta) -> None:
         nonlocal frame_count, last_frame_t, last_infer_ms, fps_ema
         frame_count += 1
+
+        # refresh camera:{id}:status TTL periodically so it doesn't expire
+        # (120s TTL) while the feed is healthy — every ~10s at 15fps
+        if stm is not None and frame_count % 150 == 0:
+            await stm.set_camera_status(args.camera_id, "online")
 
         now = time.monotonic()
         # tell camera stalls apart from slow inference: if the gap dwarfs the
@@ -693,6 +716,8 @@ async def main() -> None:
                         if row_id is not None:
                             await event_store.close_presence(row_id, ev.timestamp_ns)
                         pending_unknown.pop(ev.track_id, None)
+                        if stm is not None and ev.person_id:
+                            await stm.remove_zone_occupant(ev.zone_id, ev.person_id)
                     for trig in alert_engine.evaluate(
                         event_type=ev.event_type, camera_id=ev.camera_id,
                         zone_id=ev.zone_id, person_id=ev.person_id,
