@@ -513,6 +513,7 @@ async def main() -> None:
                         at_risk[tracked[i].track_id] = True
                         at_risk[tracked[j].track_id] = True
 
+        render_info: list[dict] = []
         for t in tracked:
             bbox = t.bbox.astype(int)
 
@@ -536,6 +537,58 @@ async def main() -> None:
                 force=frames_gone > 3,
                 good_view=(not sustained) and short_px >= 32,
             )
+            render_info.append({
+                "t": t, "bbox": bbox, "frames_gone": frames_gone,
+                "recently_back": recently_back, "back_gap": back_gap,
+                "sustained": sustained, "short_px": short_px,
+                "name_txt": name_txt,
+            })
+
+        # Same-frame identity collision: two DIFFERENT simultaneously-tracked
+        # bodies cannot legitimately be the same enrolled person. A crossing
+        # or a noisy embedding can momentarily give two tracks an `accept`
+        # match against the same gallery entry; the per-track misses-based
+        # demotion in resolve_label is too slow to catch this (it only counts
+        # FAILED matches). Enforce exclusivity immediately: the
+        # higher-similarity claimant keeps the name, the other(s) are forced
+        # back to unknown this frame (logged as an IDENTITY_CORRECTED, same
+        # as any other demotion).
+        claims: dict[str, list[int]] = {}
+        for info in render_info:
+            _, _, _, _, pid = track_labels.get(
+                info["t"].track_id, ("", 0.0, -999, 0, None)
+            )
+            if pid is not None:
+                claims.setdefault(pid, []).append(info["t"].track_id)
+        for claimant_ids in claims.values():
+            if len(claimant_ids) < 2:
+                continue
+            claimant_ids.sort(key=lambda tid: track_labels[tid][1], reverse=True)
+            keeper_id = claimant_ids[0]
+            for loser_id in claimant_ids[1:]:
+                label, sim, _, _, _ = track_labels[loser_id]
+                print(f"  ! track {loser_id} demoted: {label} -> unknown "
+                      f"(same identity also claimed by track {keeper_id} "
+                      f"this frame)")
+                if event_store is not None:
+                    await event_store.write_identity_correction(
+                        camera_id=args.camera_id, track_id=loser_id,
+                        from_label=label, to_label="unknown",
+                        since_ns=named_since.get(loser_id, time.time_ns()),
+                        zone_id=args.zone_id, similarity=sim,
+                    )
+                named_since.pop(loser_id, None)
+                track_labels[loser_id] = ("unknown", sim, frame_count, 0, None)
+                at_risk[loser_id] = True
+                for info in render_info:
+                    if info["t"].track_id == loser_id:
+                        info["name_txt"] = f"unknown ({sim:.2f})"
+
+        for info in render_info:
+            t, bbox = info["t"], info["bbox"]
+            frames_gone, recently_back = info["frames_gone"], info["recently_back"]
+            back_gap, sustained = info["back_gap"], info["sustained"]
+            short_px, name_txt = info["short_px"], info["name_txt"]
 
             console_extra = f"  hits={t.hits} bank={len(t.embedding_bank)} {short_px}px"
             if name_txt:
