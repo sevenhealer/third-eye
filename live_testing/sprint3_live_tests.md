@@ -55,6 +55,19 @@ see "Deferred — accept for now" below so you don't chase the wrong target.
 
 - **`inference: CPU` on the GPU box** / `libcublasLt.so.12` errors → CUDA
   install drift; fix per Sprint 2's CUDA section before continuing.
+- **`--gpu N` silently runs on the wrong physical card** → CUDA's default
+  device order is FASTEST_FIRST, which does not match `nvidia-smi`'s
+  PCI-bus-order index on a mixed-GPU box. Confirmed live (2026-06-18): on
+  this box's 4 GPUs, `--gpu 1` was actually selecting `nvidia-smi`'s GPU 3
+  (the 3070, the same card driving the desktop) instead of GPU 1 (the
+  3060). Fixed by pinning `CUDA_DEVICE_ORDER=PCI_BUS_ID` alongside
+  `CUDA_VISIBLE_DEVICES` in every script that takes `--gpu`
+  (`run_live.py`, `run_objects.py`, `enroll.py`, `capture_dataset.py`,
+  `train_detector.py`). If you ever see CUDA fail with "invalid device
+  ordinal" across *every* `--gpu` value (not just one), that's a
+  different problem — a GPU has likely dropped off the bus; check
+  `nvidia-smi -i N` for each index for "No devices were found" and reboot
+  if so (a dropped GPU breaks CUDA init box-wide, not just for that index).
 - **Events not appearing in the DB** → did you pass `--persist-events`? is
   Postgres up and the schema loaded (STEP 0)?
 - **Alert never fires** → is the zone seeded with `zone_type='restricted'`?
@@ -67,6 +80,20 @@ see "Deferred — accept for now" below so you don't chase the wrong target.
 - **A name sticks to the wrong person after two people cross** for more than
   a few seconds of clear frontal views → report (the demotion guard should
   catch it).
+  > **Confirmed live + fixed (2026-06-18):** during a real two-person
+  > crossing test, both the enrolled person AND the unenrolled second
+  > person displayed as the same enrolled name ("Rohan") simultaneously —
+  > a same-frame identity collision, not just a stuck label. Root cause:
+  > `resolve_label()` decided each track's identity independently with no
+  > check that another currently-active track wasn't already claiming the
+  > same person; the misses-based demotion only catches *failed* matches,
+  > not duplicate *accepts*. Fixed in `run_live.py` with an exclusivity
+  > pass: when two active tracks claim the same `person_id` in one frame,
+  > the higher-similarity one keeps the name and the other is forced back
+  > to `unknown` immediately (logged as `IDENTITY_CORRECTED`). Regression
+  > checked solo (no false demotions); re-confirming the actual collision
+  > path with a real second person is still pending — do that the next
+  > time a second person is available and report back.
 - **fps that *grows* its lag over time** (vs a constant small delay) → a
   backlog bug; report. Constant small lag on the x1 link is normal.
 
@@ -572,6 +599,24 @@ are separate candidates while the same unknown seen twice is merged.
 > already-enrolled person (see Sprint 2 STEP 9 demotion note) also produces
 > a candidate — but with a HIGH suggested similarity to themselves, which is
 > the cue to `(b) merge` instead of rejecting or creating a duplicate.
+
+> **Reviewing crops without a screen on hand:** pull a crop straight out of
+> MinIO with boto3 (`S3_ENDPOINT_URL`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` are in
+> `.env`) and view the downloaded jpg directly — no need to browse MinIO's
+> web console. Useful when deciding approve/merge/reject on an old/stale
+> candidate queue without a live person in frame to compare against.
+
+> **API mechanics confirmed without a live unknown person (2026-06-18):**
+> when no second/unknown person is available to generate a real candidate,
+> the approve/merge/reject *endpoints* themselves can still be verified by
+> inserting synthetic `enrollment_candidates` rows directly (any normalized
+> 512-dim vector as `mean_embedding`) and exercising all three flows
+> end-to-end, then deleting the synthetic rows + any `face_gallery` rows
+> they created (a synthetic random embedding must NOT be left in a real
+> person's gallery — it'll degrade their recognition). This confirms the
+> *wiring* (person/gallery creation, audit log, status transitions) but
+> NOT the *visual* correctness of a real suggestion — still do the real
+> end-to-end version with an actual unknown person when one's available.
 
 ---
 
