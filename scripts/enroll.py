@@ -89,8 +89,12 @@ def _set_minimal_env() -> None:
 async def main() -> None:
     args = parse_args()
 
-    # must happen before torch/onnxruntime touch CUDA
+    # must happen before torch/onnxruntime touch CUDA. CUDA_DEVICE_ORDER
+    # defaults to FASTEST_FIRST, which doesn't match nvidia-smi's
+    # PCI-bus-order index on this box — pin PCI_BUS_ID so --gpu N always
+    # means nvidia-smi's GPU N (see run_live.py).
     if args.gpu is not None:
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
     try:

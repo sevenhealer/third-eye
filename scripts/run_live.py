@@ -180,8 +180,13 @@ async def main() -> None:
     args = parse_args()
 
     # must happen before torch/onnxruntime touch CUDA: the chosen card is
-    # remapped to device 0 for this process, so ctx_id=0 stays correct
+    # remapped to device 0 for this process, so ctx_id=0 stays correct.
+    # CUDA_DEVICE_ORDER defaults to FASTEST_FIRST, which on this 4-GPU box
+    # does NOT match nvidia-smi's index (PCI bus order) — e.g. --gpu 1
+    # silently selected the 3070 (CUDA's #1) instead of nvidia-smi's #1
+    # (the 3060). Pin PCI_BUS_ID so --gpu N always means nvidia-smi's GPU N.
     if args.gpu is not None:
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
     _check_deps()

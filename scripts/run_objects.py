@@ -74,6 +74,10 @@ def _set_minimal_env() -> None:
 async def main() -> None:
     args = parse_args()
     if args.gpu is not None:
+        # CUDA's default device order (FASTEST_FIRST) doesn't match
+        # nvidia-smi's PCI-bus-order index on this box — pin PCI_BUS_ID so
+        # --gpu N always means nvidia-smi's GPU N (see run_live.py).
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     _set_minimal_env()
 
