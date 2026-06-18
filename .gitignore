@@ -52,6 +52,10 @@ data/enrolled/
 data/feedback/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+
+# Live camera snapshots written by run_live.py/run_objects.py for the
+# dashboard's /stream endpoint — ephemeral, regenerated every frame
+data/snapshots/
 !data/enrolled/.gitkeep
 !data/feedback/.gitkeep
 

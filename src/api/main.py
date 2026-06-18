@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import make_asgi_app
 
 from src.core.config import get_settings
@@ -53,6 +56,16 @@ app.add_middleware(
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
 
+# ── Live camera snapshots (written by run_live.py/run_objects.py) ────────────
+_SNAPSHOTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "snapshots"
+_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/stream", StaticFiles(directory=str(_SNAPSHOTS_DIR)), name="stream")
+
+# ── Operator dashboard (static, no build tooling) ─────────────────────────────
+_DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "dashboard"
+if _DASHBOARD_DIR.is_dir():
+    app.mount("/dashboard", StaticFiles(directory=str(_DASHBOARD_DIR), html=True), name="dashboard")
+
 # ── Exception handlers ────────────────────────────────────────────────────────
 
 @app.exception_handler(AuthorizationError)
@@ -95,7 +108,7 @@ async def health() -> dict:
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-from src.api.routers import auth, cameras, identities, events, queries, alerts, admin  # noqa: E402
+from src.api.routers import auth, cameras, identities, events, queries, alerts, admin, zones  # noqa: E402
 
 app.include_router(auth.router,        prefix="/api/v1/auth",        tags=["auth"])
 app.include_router(cameras.router,     prefix="/api/v1/cameras",     tags=["cameras"])
@@ -104,3 +117,4 @@ app.include_router(events.router,      prefix="/api/v1/events",       tags=["eve
 app.include_router(queries.router,     prefix="/api/v1/queries",      tags=["queries"])
 app.include_router(alerts.router,      prefix="/api/v1/alerts",       tags=["alerts"])
 app.include_router(admin.router,       prefix="/api/v1/admin",        tags=["admin"])
+app.include_router(zones.router,       prefix="/api/v1/zones",        tags=["zones"])

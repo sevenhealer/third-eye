@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Third-Eye Operator Dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #0e1116; color: #e6e6e6;
+  }
+  header {
+    padding: 12px 20px; background: #161b22; border-bottom: 1px solid #2a2f37;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #login-box {
+    max-width: 320px; margin: 80px auto; padding: 24px; background: #161b22;
+    border-radius: 8px; border: 1px solid #2a2f37;
+  }
+  #login-box input {
+    width: 100%; box-sizing: border-box; margin-bottom: 10px; padding: 8px;
+    background: #0e1116; color: #e6e6e6; border: 1px solid #2a2f37; border-radius: 4px;
+  }
+  #login-box button, header button {
+    padding: 8px 14px; background: #2563eb; color: white; border: none;
+    border-radius: 4px; cursor: pointer; font-size: 13px;
+  }
+  #login-error { color: #f87171; font-size: 13px; min-height: 18px; }
+  main { display: none; padding: 16px; gap: 16px; flex-direction: column; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+  .cam-tile, .panel {
+    background: #161b22; border: 1px solid #2a2f37; border-radius: 8px; overflow: hidden;
+  }
+  .cam-tile img { width: 100%; display: block; background: #000; aspect-ratio: 16/9; object-fit: contain; }
+  .cam-tile .label {
+    display: flex; justify-content: space-between; padding: 6px 10px; font-size: 13px;
+  }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-online { background: #22c55e; }
+  .status-offline, .status-unknown { background: #6b7280; }
+  .panel { padding: 14px; }
+  .panel h2 { font-size: 14px; margin: 0 0 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2f37; }
+  th { color: #9ca3af; font-weight: 500; }
+  .badge { padding: 2px 7px; border-radius: 10px; font-size: 11px; background: #2a2f37; }
+  .badge.restricted { background: #7f1d1d; color: #fecaca; }
+  #alerts-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
+  #alerts-list li {
+    padding: 8px; border-bottom: 1px solid #2a2f37; font-size: 13px; display: flex;
+    justify-content: space-between; gap: 10px;
+  }
+  #alerts-list li .sev-HIGH { color: #f87171; }
+  #alerts-list li .sev-MEDIUM { color: #fbbf24; }
+  #alerts-list li .sev-LOW { color: #9ca3af; }
+  .empty { color: #6b7280; font-size: 13px; padding: 8px 0; }
+</style>
+</head>
+<body>
+
+<div id="login-box">
+  <h2 style="margin-top:0">Third-Eye Login</h2>
+  <input id="login-user" placeholder="Username" autocomplete="username">
+  <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+  <button onclick="doLogin()">Sign in</button>
+  <div id="login-error"></div>
+</div>
+
+<header style="display:none" id="topbar">
+  <h1>Third-Eye Operator Dashboard</h1>
+  <button onclick="logout()">Sign out</button>
+</header>
+
+<main id="main">
+  <section>
+    <h2 style="color:#9ca3af;font-size:14px;text-transform:uppercase;letter-spacing:.04em">Cameras</h2>
+    <div id="cameras" class="grid"></div>
+  </section>
+
+  <section style="margin-top:18px" class="grid">
+    <div class="panel">
+      <h2>Zones</h2>
+      <table id="zones-table">
+        <thead><tr><th>Zone</th><th>Type</th><th>Occupants</th><th>Object counts</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Live Alerts</h2>
+      <ul id="alerts-list"><li class="empty">Waiting for alerts...</li></ul>
+    </div>
+  </section>
+</main>
+
+<script>
+let token = sessionStorage.getItem('te_token');
+let ws = null;
+
+function authHeaders() { return { 'Authorization': 'Bearer ' + token }; }
+
+async function doLogin() {
+  const user = document.getElementById('login-user').value;
+  const pass = document.getElementById('login-pass').value;
+  const body = new URLSearchParams({ username: user, password: pass });
+  try {
+    const res = await fetch('/api/v1/auth/login', { method: 'POST', body });
+    if (!res.ok) throw new Error('Invalid credentials');
+    const data = await res.json();
+    token = data.access_token;
+    sessionStorage.setItem('te_token', token);
+    enterDashboard();
+  } catch (e) {
+    document.getElementById('login-error').textContent = e.message;
+  }
+}
+
+function logout() {
+  sessionStorage.removeItem('te_token');
+  token = null;
+  if (ws) ws.close();
+  document.getElementById('main').style.display = 'none';
+  document.getElementById('topbar').style.display = 'none';
+  document.getElementById('login-box').style.display = 'block';
+}
+
+function enterDashboard() {
+  document.getElementById('login-box').style.display = 'none';
+  document.getElementById('topbar').style.display = 'flex';
+  document.getElementById('main').style.display = 'flex';
+  refreshCameras();
+  refreshZones();
+  connectAlerts();
+  setInterval(refreshCameras, 2000);
+  setInterval(refreshZones, 2000);
+}
+
+async function refreshCameras() {
+  const res = await fetch('/api/v1/cameras', { headers: authHeaders() });
+  if (res.status === 401) return logout();
+  const cams = await res.json();
+  const root = document.getElementById('cameras');
+  root.innerHTML = cams.map(c => `
+    <div class="cam-tile">
+      <img src="/stream/${c.camera_id}/latest.jpg?t=${Date.now()}"
+           onerror="this.style.opacity=0.3"
+           onload="this.style.opacity=1">
+      <div class="label">
+        <span><span class="status-dot status-${c.status}"></span>${c.display_name}</span>
+        <span>${c.zone_id || ''}</span>
+      </div>
+    </div>
+  `).join('') || '<div class="empty">No cameras registered.</div>';
+}
+
+async function refreshZones() {
+  const res = await fetch('/api/v1/zones', { headers: authHeaders() });
+  if (res.status === 401) return logout();
+  const zones = await res.json();
+  const tbody = document.querySelector('#zones-table tbody');
+  tbody.innerHTML = zones.map(z => `
+    <tr>
+      <td>${z.display_name}</td>
+      <td><span class="badge ${z.zone_type === 'restricted' ? 'restricted' : ''}">${z.zone_type}</span></td>
+      <td>${z.occupants.length ? z.occupants.map(o => o.display_name).join(', ') : '—'}</td>
+      <td>${Object.entries(z.object_counts).map(([k,v]) => `${k}:${v}`).join(', ') || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+function connectAlerts() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/api/v1/alerts/ws?token=${token}`);
+  const list = document.getElementById('alerts-list');
+  ws.onopen = () => { list.innerHTML = '<li class="empty">Connected — waiting for alerts...</li>'; };
+  ws.onclose = () => { list.insertAdjacentHTML('afterbegin', '<li class="empty">Disconnected.</li>'); };
+  ws.onmessage = (ev) => {
+    const a = JSON.parse(ev.data);
+    if (list.querySelector('.empty')) list.innerHTML = '';
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${a.event_type || a.alert_type || 'EVENT'} — ${a.zone_id || ''}</span>
+                     <span class="sev-${a.severity || 'LOW'}">${a.severity || ''}</span>`;
+    list.insertAdjacentElement('afterbegin', li);
+  };
+}
+
+if (token) enterDashboard();
+</script>
+</body>
+</html>

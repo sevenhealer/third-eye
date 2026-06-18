@@ -626,7 +626,7 @@ async def main() -> None:
                 f"bbox=[{bbox[0]:4},{bbox[1]:4},{bbox[2]:4},{bbox[3]:4}]  "
                 f"conf={t.confidence:.3f}{console_extra}"
             )
-            if args.show:
+            if args.show or stm is not None:
                 if recently_back:
                     color = (0, 165, 255)    # orange: returned after a gap
                 elif sustained:
@@ -817,6 +817,22 @@ async def main() -> None:
             cv2.imshow(win_name, disp)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 producer.stop()
+
+        # dashboard snapshot: downscaled annotated JPEG, written every ~10
+        # frames (not every frame — disk I/O, and the dashboard only polls
+        # at ~1fps anyway). Atomic write (tmp + rename) so /stream never
+        # serves a half-written file.
+        if stm is not None and frame_count % 10 == 0:
+            h, w = frame.shape[:2]
+            scale = min(960 / w, 1.0)
+            snap = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
+            ok_enc, buf = cv2.imencode(".jpg", snap, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok_enc:
+                snap_dir = ROOT / "data" / "snapshots" / args.camera_id
+                snap_dir.mkdir(parents=True, exist_ok=True)
+                tmp_path = snap_dir / "latest.jpg.tmp"
+                tmp_path.write_bytes(buf.tobytes())
+                tmp_path.replace(snap_dir / "latest.jpg")
 
     try:
         await producer.run(process_frame)
