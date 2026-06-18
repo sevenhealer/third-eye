@@ -90,12 +90,21 @@ class FrameProducer:
             ok, frame = self.camera.read_frame()
             if not ok:
                 logger.warning(
-                    "frame_producer_camera_failed",
+                    "frame_producer_camera_lost_reconnecting",
                     camera_id=self.camera_id,
                     frames_produced=self._frame_count,
                 )
-                self._running = False
-                break
+                # blocking backoff — sequential mode has no separate grabber
+                # thread, so there's nothing else to keep responsive here
+                if not await asyncio.to_thread(self.camera.reopen_with_backoff):
+                    logger.warning(
+                        "frame_producer_camera_failed",
+                        camera_id=self.camera_id,
+                        frames_produced=self._frame_count,
+                    )
+                    self._running = False
+                    break
+                continue
 
             await self._emit(frame, callback)
             await self._throttle(t0)
@@ -146,8 +155,15 @@ class FrameProducer:
         while self._running:
             ok, frame = self.camera.read_frame()
             if not ok:
-                self._grabber_failed = True
-                return
+                logger.warning(
+                    "frame_producer_camera_lost_reconnecting",
+                    camera_id=self.camera_id,
+                    frames_produced=self._frame_count,
+                )
+                if not self.camera.reopen_with_backoff():
+                    self._grabber_failed = True
+                    return
+                continue
             with self._latest_lock:
                 self._latest_frame = frame
                 self._latest_seq += 1
