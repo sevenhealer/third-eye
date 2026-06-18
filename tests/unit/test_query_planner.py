@@ -22,10 +22,20 @@ def test_intent_classification(query, expected):
     assert classify_intent(query) == expected
 
 
-def test_extract_zone():
-    assert _extract_zone("Who is in Room A?") == "room_a"
-    assert _extract_zone("Is anyone in the server room?") == "server_room"
-    assert _extract_zone("No location mentioned") is None
+async def test_extract_zone():
+    # known_zones=[] skips the DB lookup, exercising the regex fallback only
+    assert await _extract_zone("Who is in Room A?", known_zones=[]) == "room_a"
+    assert await _extract_zone("Is anyone in the server room?", known_zones=[]) == "server_room"
+    assert await _extract_zone("No location mentioned", known_zones=[]) is None
+
+
+async def test_extract_zone_matches_real_zone_names():
+    # deployment-specific zone names (e.g. "bedroom") don't match the generic
+    # "room X"/"corridor"/"entrance" regex and must come from known_zones
+    zones = [("bedroom", "Bedroom"), ("doorway", "Front Doorway")]
+    assert await _extract_zone("Who is in the bedroom?", known_zones=zones) == "bedroom"
+    assert await _extract_zone("anyone near the front doorway?", known_zones=zones) == "doorway"
+    assert await _extract_zone("Who is in Room A?", known_zones=zones) == "room_a"
 
 
 def test_extract_person_name():

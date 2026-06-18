@@ -6,6 +6,8 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import text
+
 from src.core.database import get_db, get_neo4j_driver, get_redis
 from src.core.logging import get_logger
 
@@ -60,7 +62,29 @@ def classify_intent(query: str) -> QueryIntent:
     return QueryIntent.UNKNOWN
 
 
-def _extract_zone(query: str) -> str | None:
+async def _extract_zone(
+    query: str, known_zones: list[tuple[str, str | None]] | None = None
+) -> str | None:
+    # Prefer the deployment's actual zone_id/display_name over guessing from
+    # phrasing — the AGILE_PLAN's example queries ("Room A", "the corridor")
+    # don't match every deployment's real zone names (e.g. "bedroom").
+    # known_zones=None (the production default) fetches them from the DB;
+    # tests can pass a static list (or []) to stay DB-free.
+    if known_zones is None:
+        known_zones = []
+        async for db in get_db():
+            known_zones = (await db.execute(
+                text("SELECT zone_id, display_name FROM zones")
+            )).fetchall()
+            break
+
+    q_lower = query.lower()
+    for zone_id, display_name in known_zones:
+        if zone_id.lower().replace("_", " ") in q_lower or zone_id.lower() in q_lower:
+            return zone_id
+        if display_name and display_name.lower() in q_lower:
+            return zone_id
+
     m = re.search(
         r"\b(room [a-z0-9]+|corridor|entrance|server.?room|zone [a-z0-9]+)\b",
         query, re.I
@@ -86,16 +110,29 @@ def _extract_object_class(query: str) -> str | None:
     return None
 
 
+async def _resolve_person_names(person_ids: list[str]) -> dict[str, str]:
+    if not person_ids:
+        return {}
+    async for db in get_db():
+        rows = (await db.execute(
+            text("SELECT person_id, display_name FROM persons WHERE person_id = ANY(:ids)"),
+            {"ids": person_ids},
+        )).fetchall()
+        return {str(r.person_id): r.display_name for r in rows}
+    return {}
+
+
 async def _query_current_presence(zone_id: str | None) -> dict[str, Any]:
     redis = await get_redis()
     if zone_id:
         raw = await redis.get(f"zone:{zone_id}:occupants")
-        if raw:
-            occupants = json.loads(raw)
-        else:
-            occupants = []
+        occupants = json.loads(raw) if raw else []
         count = await redis.get(f"zone:{zone_id}:count") or "0"
-        return {"zone_id": zone_id, "occupants": occupants, "count": int(count)}
+        names = await _resolve_person_names(occupants)
+        return {
+            "zone_id": zone_id, "occupants": occupants, "count": int(count),
+            "occupant_names": [names.get(pid, pid) for pid in occupants],
+        }
     # No zone: return all zones
     keys = await redis.keys("zone:*:occupants")
     result = {}
@@ -305,7 +342,7 @@ async def _synthesize_with_llm(
 def _template_answer(intent: QueryIntent, context: dict[str, Any]) -> str:
     """Fallback template-based answer when LLM is unavailable."""
     if intent == QueryIntent.CURRENT_PRESENCE:
-        occupants = context.get("occupants", [])
+        occupants = context.get("occupant_names") or context.get("occupants", [])
         zone = context.get("zone_id", "the zone")
         if occupants:
             return f"{len(occupants)} person(s) currently in {zone}: {', '.join(occupants)}."
@@ -339,7 +376,7 @@ async def execute_nl_query(
     user_role: str,
 ) -> dict[str, Any]:
     intent = classify_intent(query_text)
-    zone_id = _extract_zone(query_text)
+    zone_id = await _extract_zone(query_text)
     person_name = _extract_person_name(query_text)
     object_class = _extract_object_class(query_text)
 
