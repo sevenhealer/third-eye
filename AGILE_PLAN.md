@@ -348,14 +348,15 @@ E10-S01 (Prometheus scraping)  must complete before E10-S02, E10-S04
 - E01-S04: Camera disconnect watchdog and reconnect
 - **Milestone M-03: MVP Complete**
 
-**MVP Acceptance Criteria:**
-- [ ] "Who is currently in Room A?" returns correct answer in < 500ms
-- [ ] Unknown person triggers enrollment candidate in operator UI within 30 seconds
-- [ ] Printed photo rejected by anti-spoofing in 100% of basic test cases
-- [ ] `PERSON_ENTERED` event fires within 2 seconds of zone entry
-- [ ] Alert delivered via webhook within 5 seconds
-- [ ] 2 cameras at 10 FPS with VRAM < 12 GB
-- [ ] Audit log records all enrollments and operator actions
+**MVP Acceptance Criteria:** (see `live_testing/sprint4_live_tests.md` for
+verification detail and what still needs human observation)
+- [x] "Who is currently in Room A?" returns correct answer in < 500ms
+- [ ] Unknown person triggers enrollment candidate in operator UI within 30 seconds — UI built, needs visual confirmation
+- [ ] Printed photo rejected by anti-spoofing in 100% of basic test cases — intentionally deferred to Sprint 5
+- [x] `PERSON_ENTERED` event fires within 2 seconds of zone entry
+- [x] Alert delivered via webhook within 5 seconds
+- [ ] 2 cameras at 10 FPS with VRAM < 12 GB — VRAM confirmed (~2.8GB); real 2-camera throughput needs the physical camera back online
+- [x] Audit log records all enrollments and operator actions
 
 ---
 
