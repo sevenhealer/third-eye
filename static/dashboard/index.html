@@ -55,6 +55,20 @@
   #alerts-list li .sev-MEDIUM { color: #fbbf24; }
   #alerts-list li .sev-LOW { color: #9ca3af; }
   .empty { color: #6b7280; font-size: 13px; padding: 8px 0; }
+  .cand-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .cand-card { background: #0e1116; border: 1px solid #2a2f37; border-radius: 6px; overflow: hidden; }
+  .cand-card img { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: #1a1f27; display: block; }
+  .cand-body { padding: 8px; font-size: 12px; }
+  .cand-body .meta { color: #9ca3af; margin-bottom: 6px; }
+  .cand-body .suggestion { color: #fbbf24; margin-bottom: 8px; }
+  .cand-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cand-actions button {
+    flex: 1; padding: 5px 6px; font-size: 11px; border: none; border-radius: 4px;
+    cursor: pointer; color: white;
+  }
+  .btn-approve { background: #16a34a; }
+  .btn-merge { background: #2563eb; }
+  .btn-reject { background: #dc2626; }
 </style>
 </head>
 <body>
@@ -76,6 +90,13 @@
   <section>
     <h2 style="color:#9ca3af;font-size:14px;text-transform:uppercase;letter-spacing:.04em">Cameras</h2>
     <div id="cameras" class="grid"></div>
+  </section>
+
+  <section style="margin-top:18px">
+    <div class="panel">
+      <h2>Pending Enrollments</h2>
+      <div id="candidates" class="cand-grid"><div class="empty">Loading...</div></div>
+    </div>
   </section>
 
   <section style="margin-top:18px" class="grid">
@@ -130,9 +151,11 @@ function enterDashboard() {
   document.getElementById('main').style.display = 'flex';
   refreshCameras();
   refreshZones();
+  refreshCandidates();
   connectAlerts();
   setInterval(refreshCameras, 2000);
   setInterval(refreshZones, 2000);
+  setInterval(refreshCandidates, 4000);
 }
 
 async function refreshCameras() {
@@ -166,6 +189,83 @@ async function refreshZones() {
       <td>${Object.entries(z.object_counts).map(([k,v]) => `${k}:${v}`).join(', ') || '—'}</td>
     </tr>
   `).join('');
+}
+
+const candImageCache = {};   // candidate_id -> blob URL, fetched once per page session
+
+async function loadCandidateImage(candidateId, cropUrl) {
+  if (candImageCache[candidateId]) return candImageCache[candidateId];
+  const res = await fetch(cropUrl, { headers: authHeaders() });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  candImageCache[candidateId] = url;
+  return url;
+}
+
+async function refreshCandidates() {
+  const res = await fetch('/api/v1/identities/candidates?status=pending', { headers: authHeaders() });
+  if (res.status === 401) return logout();
+  const data = await res.json();
+  const root = document.getElementById('candidates');
+  if (!data.candidates.length) {
+    root.innerHTML = '<div class="empty">No pending enrollments.</div>';
+    return;
+  }
+  root.innerHTML = data.candidates.map(c => `
+    <div class="cand-card" id="cand-${c.candidate_id}">
+      <img id="cand-img-${c.candidate_id}" alt="face crop">
+      <div class="cand-body">
+        <div class="meta">cam ${c.camera_id} · track ${c.track_id} · last seen ${new Date(c.last_seen_at).toLocaleTimeString()}</div>
+        ${c.suggested_name
+          ? `<div class="suggestion">Looks like ${c.suggested_name} (${c.suggested_similarity})</div>`
+          : '<div class="suggestion" style="color:#6b7280">No gallery match</div>'}
+        <div class="cand-actions">
+          <button class="btn-approve" onclick="approveCandidate('${c.candidate_id}')">New person</button>
+          ${c.suggested_person_id
+            ? `<button class="btn-merge" onclick="mergeCandidate('${c.candidate_id}', '${c.suggested_person_id}', '${c.suggested_name}')">Merge</button>`
+            : ''}
+          <button class="btn-reject" onclick="rejectCandidate('${c.candidate_id}')">Reject</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  for (const c of data.candidates) {
+    if (!c.crop_urls.length) continue;
+    const url = await loadCandidateImage(c.candidate_id, c.crop_urls[0]);
+    const img = document.getElementById(`cand-img-${c.candidate_id}`);
+    if (img && url) img.src = url;
+  }
+}
+
+async function approveCandidate(candidateId) {
+  const name = prompt('Display name for this new person:');
+  if (!name) return;
+  await fetch(`/api/v1/identities/candidates/${candidateId}/approve`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: name }),
+  });
+  refreshCandidates();
+}
+
+async function mergeCandidate(candidateId, personId, name) {
+  if (!confirm(`Merge this candidate into ${name}?`)) return;
+  await fetch(`/api/v1/identities/candidates/${candidateId}/approve`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ person_id: personId }),
+  });
+  refreshCandidates();
+}
+
+async function rejectCandidate(candidateId) {
+  if (!confirm('Reject this candidate?')) return;
+  await fetch(`/api/v1/identities/candidates/${candidateId}/reject`, {
+    method: 'POST', headers: authHeaders(),
+  });
+  refreshCandidates();
 }
 
 function connectAlerts() {

@@ -4,7 +4,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.auth import ActiveUser
 from src.core.audit_log import write_audit_event
 from src.core.database import get_db
+from src.storage.object_store import StorageError, get_object_store
 
 router = APIRouter()
 
@@ -161,7 +162,10 @@ async def list_candidates(
                 "first_seen_at": r.first_seen_at.isoformat(),
                 "last_seen_at": r.last_seen_at.isoformat(),
                 "crop_count": len(r.crop_paths or []),
-                "crop_paths": r.crop_paths or [],
+                "crop_urls": [
+                    f"/api/v1/identities/candidates/{r.candidate_id}/crop/{i}"
+                    for i in range(len(r.crop_paths or []))
+                ],
                 "embedding_dims": r.dims,
                 "status": r.status,
                 # suggested existing match — null if no gallery/no faces
@@ -275,6 +279,30 @@ async def approve_candidate(
         last_seen_zone=None,
         metadata=person.metadata or {},
     )
+
+
+@router.get("/candidates/{candidate_id}/crop/{index}")
+async def get_candidate_crop(
+    candidate_id: UUID,
+    index: int,
+    current_user: ActiveUser,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Proxies the crop image from object storage. The browser can't resolve
+    the internal 'minio' hostname used for presigned URLs, so this streams
+    the bytes through the API instead."""
+    current_user.require_role("admin")
+    row = (await db.execute(
+        text("SELECT crop_paths FROM enrollment_candidates WHERE candidate_id = :cid"),
+        {"cid": str(candidate_id)},
+    )).fetchone()
+    if row is None or not row.crop_paths or index >= len(row.crop_paths):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crop not found.")
+    try:
+        data = get_object_store().get_bytes(row.crop_paths[index])
+    except StorageError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Response(content=data, media_type="image/jpeg")
 
 
 @router.post("/candidates/{candidate_id}/reject")
