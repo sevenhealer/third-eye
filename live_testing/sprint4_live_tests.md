@@ -331,21 +331,23 @@ GPU contention — comfortably fast enough for two cameras at 10fps each
 (20fps combined demand vs. ~25-30fps/process theoretical capacity even
 while sharing the GPU).
 
-**👀 Needs your eyes / the real camera:** once the actual camera is back
-online, re-run this with two real `run_live.py` processes against it
-(same RTSP URL, two different `--camera-id`/`--zone-id` pairs is the
-closest approximation without a second physical camera) and confirm
-both feeds stay smooth and responsive at `--fps 10` simultaneously —
-the VRAM/inference-time numbers above predict this will be fine, but
-predicting isn't the same as watching it.
-
 ```bash
-.venv/bin/python scripts/run_live.py --source <rtsp-url> --fps 10 \
-  --recognize --camera-id cam0 --zone-id bedroom --gpu 0 &
-.venv/bin/python scripts/run_live.py --source <rtsp-url> --fps 10 \
+.venv/bin/python scripts/run_live.py --source <rtsp-url> --fps 10 --show \
+  --recognize --camera-id cam0 --zone-id bedroom --persist-events --gpu 0 &
+.venv/bin/python scripts/run_live.py --source <rtsp-url> --fps 10 --show \
   --recognize --camera-id cam1 --zone-id corridor --gpu 0 &
 watch -n1 nvidia-smi
 ```
+
+**Confirmed live (2026-06-22), with the real camera, two windows
+(`--show`) on the box's own display:** both feeds smooth simultaneously
+at 10fps each, no visible contention; VRAM steady at **2.84 GB**; both
+processes correctly recognized the enrolled user thousands of times
+each. The other tracked object (static, low-similarity `unknown`) is the
+Krishna-statue false positive already documented in Sprint 3 — a
+non-human object the closed-set detector still boxes as a face-like
+region; the identity layer correctly keeps it `unknown`, and true
+non-human rejection is anti-spoofing's job in Sprint 5. Not a new bug.
 
 ---
 
@@ -380,8 +382,7 @@ quietly edited after the fact.)
 - [x] `PERSON_ENTERED` fires within 2s of zone entry — confirmed in
       Sprint 3
 - [x] Alert delivered via webhook within 5s — confirmed ~1s in Sprint 3
-- [ ] 2 cameras at 10 FPS with VRAM < 12 GB — VRAM confirmed (~2.8GB);
-      real two-camera throughput **needs the physical camera back online
-      + your observation (STEP 6)**
+- [x] 2 cameras at 10 FPS with VRAM < 12 GB — confirmed live with the
+      real camera, both feeds smooth, VRAM steady at 2.84GB
 - [x] Audit log records all enrollments and operator actions —
       hash-chained, confirmed via the candidate-reject test

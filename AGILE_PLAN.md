@@ -355,7 +355,7 @@ verification detail and what still needs human observation)
 - [ ] Printed photo rejected by anti-spoofing in 100% of basic test cases — intentionally deferred to Sprint 5
 - [x] `PERSON_ENTERED` event fires within 2 seconds of zone entry
 - [x] Alert delivered via webhook within 5 seconds
-- [ ] 2 cameras at 10 FPS with VRAM < 12 GB — VRAM confirmed (~2.8GB); real 2-camera throughput needs the physical camera back online
+- [x] 2 cameras at 10 FPS with VRAM < 12 GB
 - [x] Audit log records all enrollments and operator actions
 
 ---
