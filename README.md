@@ -149,17 +149,60 @@ deployment evaluation harness.
 
 ## Quick Start
 
-> **Developing right now?** The sprint-by-sprint live test guides in
+### Fastest path — one command
+
+The app runs natively (so it sees the GPU directly) with infra in Docker.
+From a fresh clone:
+
+```bash
+git clone https://github.com/sevenhealer/third-eye.git
+cd third-eye
+make run
+```
+
+`make run` is idempotent and does the whole first-run setup: creates the
+virtualenv, generates `.env` with random secrets, installs deps (auto-picking
+the GPU `cu128` torch path or CPU from `nvidia-smi`), downloads the face models
+(~200 MB), starts Postgres / Redis / MinIO / Neo4j, applies DB migrations,
+builds the dashboard, and serves it. Re-running skips whatever's already done.
+
+Then open the operator dashboard and log in:
+
+| | |
+|---|---|
+| **Dashboard** | http://localhost:8000/settings/ |
+| **Login** | `admin` / `admin`  *(change it)* |
+
+**Prerequisites** — the bootstrap checks for these and tells you if one is
+missing (it can't install them for you): Docker 24+, Node 18+, Python 3.11+,
+and for GPU inference the NVIDIA driver + CUDA 12.
+
+**Webcam enrollment needs HTTPS.** Browsers only allow camera access over
+`https://` or `localhost`, so to use the Enroll page from another machine on
+the LAN, generate a self-signed cert first — `make run` then serves HTTPS:
+
+```bash
+make certs && make run     # https://<this-host>:8000  — accept the self-signed cert once
+```
+
+Other handy targets (`make help` lists all): `make fresh` (wipe all data →
+clean slate, then run), `make reset` (wipe data only), `make stop`,
+`make serve` (run without re-bootstrapping).
+
+> **Developing a specific area?** The sprint-by-sprint live test guides in
 > [`live_testing/`](live_testing/) are the fastest path:
 > [infra + API](live_testing/sprint1_live_tests.md),
 > [face pipeline](live_testing/sprint2_live_tests.md),
-> [objects + events](live_testing/sprint3_live_tests.md).
-> Key CLI tools: `scripts/download_models.py` (one-time, ~200 MB),
-> `scripts/run_live.py --source 0 --show` (live face feed),
-> `scripts/run_objects.py --source 0 --show` (live object feed),
-> `scripts/enroll.py --name "..."` (gallery enrollment).
+> [objects + events](live_testing/sprint3_live_tests.md),
+> [MVP + dashboard](live_testing/sprint4_live_tests.md).
 
-### 1. Prerequisites
+### Full containerized stack
+
+For the complete stack — Kafka, the Ollama LLM behind natural-language
+queries, Grafana, Prometheus, MLflow — use Docker Compose instead of the
+native run above.
+
+#### 1. Prerequisites
 
 ```bash
 # NVIDIA Container Toolkit (for GPU access in Docker)
@@ -171,7 +214,7 @@ curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dear
 docker compose version   # should be 2.x
 ```
 
-### 2. Clone and configure
+#### 2. Clone and configure
 
 ```bash
 git clone https://github.com/sevenhealer/third-eye.git
@@ -187,7 +230,7 @@ make setup
 > all values `make setup` writes are cryptographically random. To point at an
 > external S3 instead of the bundled MinIO, edit `S3_ENDPOINT_URL`/`S3_*`.
 
-### 3. Start all services
+#### 3. Start all services
 
 ```bash
 make up        # = docker compose up -d  (one command, after `make setup`)
@@ -195,13 +238,13 @@ make up        # = docker compose up -d  (one command, after `make setup`)
 
 This starts: PostgreSQL + pgvector, TimescaleDB, Redis, Neo4j, Kafka, Ollama, all pipeline services, FastAPI, Prometheus, and Grafana.
 
-### 4. Pull LLM models (first time, ~8 GB download)
+#### 4. Pull LLM models (first time, ~8 GB download)
 
 ```bash
 make models-pull
 ```
 
-### 5. Verify everything is healthy
+#### 5. Verify everything is healthy
 
 ```bash
 # API health
@@ -214,7 +257,7 @@ make kafka-topics
 make audit-verify
 ```
 
-### 6. Access the interfaces
+#### 6. Access the interfaces
 
 | Service | URL | Default credentials |
 |---|---|---|
@@ -224,7 +267,7 @@ make audit-verify
 | Neo4j Browser | http://localhost:7474 | neo4j / see `NEO4J_PASSWORD` |
 | Prometheus | http://localhost:9090 | — |
 
-### 7. Log in and enroll an identity
+#### 7. Log in and enroll an identity
 
 ```bash
 # Get a JWT token (default admin password is 'admin' — change immediately)
@@ -235,7 +278,7 @@ TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
 THIRDEYE_TOKEN=$TOKEN make enroll NAME="Rahul Kumar" ROLE="engineer"
 ```
 
-### 8. Ask a question
+#### 8. Ask a question
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/queries \
