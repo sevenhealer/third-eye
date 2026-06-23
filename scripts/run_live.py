@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import os
 import platform
+import signal
 import sys
 import time
 from pathlib import Path
@@ -855,6 +856,19 @@ async def main() -> None:
                     tmp_path = snap_dir / "latest.jpg.tmp"
                     tmp_path.write_bytes(jpeg_bytes)
                     tmp_path.replace(snap_dir / "latest.jpg")
+
+    # SIGINT (Ctrl+C) already stops cleanly via asyncio's default handling.
+    # SIGTERM has no such default — a plain kill would skip the finally:
+    # block below (drain alerts, release the camera) entirely. An
+    # orchestrator that manages this process (see Settings/camera
+    # supervisor) sends SIGTERM for a normal stop, so it needs the same
+    # graceful path: producer.stop() just flips a flag the run loop already
+    # checks every iteration, so run() returns normally instead of raising.
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGTERM, producer.stop)
+    except (NotImplementedError, AttributeError):
+        pass  # Windows: no add_signal_handler; SIGTERM isn't meaningful there anyway
 
     try:
         await producer.run(process_frame)
