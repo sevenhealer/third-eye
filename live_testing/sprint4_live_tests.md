@@ -527,6 +527,13 @@ either of those right now.
    camera that ran with "Record entry/exit" has real history referencing
    it; this is expected, not a bug if you go looking for the row in
    Postgres afterward and find it still there with `is_active=false`.)
+6. **Try a deliberately bad RTSP URL** (wrong password, wrong path).
+   Status should go to `crashed`. Click **"why?"** (or the **Log**
+   button) — you should see the actual underlying error (e.g.
+   `401 Unauthorized`), not just an exit code. This was a real gap found
+   live-testing this step (the first attempt only showed "crashed," no
+   reason) — fixed via a new `GET /cameras/{id}/log` endpoint that tails
+   `data/logs/<camera_id>.log`.
 
 **Backend-verified by me already (wiring only):** drove this exact
 1-5 sequence myself via headless Chrome clicking the real rendered
