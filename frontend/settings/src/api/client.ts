@@ -292,11 +292,19 @@ export const submitEnrollFrame = (sessionId: string, imageB64: string) =>
   })
 export const discardEnrollSession = (sessionId: string) =>
   apiFetch(`/api/v1/manual-enroll/sessions/${sessionId}`, { method: 'DELETE' })
+
+export interface EnrollFinalizeResult {
+  person: Person
+  merged_into_existing: boolean
+  matched_similarity: number | null
+  templates_added: number
+}
+
 export const finalizeEnrollSession = (
   sessionId: string,
   body: { display_name?: string; role?: string; person_id?: string },
 ) =>
-  apiFetch<Person>(`/api/v1/manual-enroll/sessions/${sessionId}/finalize`, {
+  apiFetch<EnrollFinalizeResult>(`/api/v1/manual-enroll/sessions/${sessionId}/finalize`, {
     method: 'POST',
     body: JSON.stringify(body),
   })

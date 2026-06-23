@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type EnrollSession,
   type EnrollFrameResult,
-  type Person,
+  type EnrollFinalizeResult,
   createEnrollSession,
   submitEnrollFrame,
   discardEnrollSession,
@@ -23,7 +23,7 @@ export function EnrollPage() {
   const [displayName, setDisplayName] = useState('')
   const [role, setRole] = useState('visitor')
   const [showPicker, setShowPicker] = useState(false)
-  const [enrolledPerson, setEnrolledPerson] = useState<Person | null>(null)
+  const [result, setResult] = useState<EnrollFinalizeResult | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -51,6 +51,19 @@ export function EnrollPage() {
 
   async function handleStart() {
     setError('')
+    // Browsers only expose the webcam (getUserMedia) on a secure context:
+    // HTTPS, or http://localhost. Over a plain-HTTP LAN address (e.g.
+    // http://10.x.x.x:8000) navigator.mediaDevices is undefined — surface
+    // that honestly instead of blaming permissions.
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      setError(
+        'Webcam capture needs a secure connection. Open the dashboard over HTTPS ' +
+          '(on the server run `make certs` once, then reload over https://…), or ' +
+          'use http://localhost:8000 directly on the server. Camera access is ' +
+          'blocked on plain-HTTP LAN addresses by the browser, not by a permission.',
+      )
+      return
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
       streamRef.current = stream
@@ -58,8 +71,12 @@ export function EnrollPage() {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
-    } catch {
-      setError('Could not access the camera — check browser permissions.')
+    } catch (e) {
+      setError(
+        e instanceof DOMException && e.name === 'NotAllowedError'
+          ? 'Camera permission denied — allow it in the browser and try again.'
+          : 'Could not access the camera (no device found, or it is in use elsewhere).',
+      )
       return
     }
 
@@ -121,10 +138,10 @@ export function EnrollPage() {
     setSubmitting(true)
     setError('')
     try {
-      const person = await finalizeEnrollSession(sessionIdRef.current, body)
+      const res = await finalizeEnrollSession(sessionIdRef.current, body)
       invalidatePersonsCache()
       sessionIdRef.current = null
-      setEnrolledPerson(person)
+      setResult(res)
       setPhase('done')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Enrollment failed.')
@@ -149,7 +166,7 @@ export function EnrollPage() {
     setFrameResult(null)
     setDisplayName('')
     setRole('visitor')
-    setEnrolledPerson(null)
+    setResult(null)
     setError('')
     setPhase('idle')
   }
@@ -256,11 +273,23 @@ export function EnrollPage() {
         </div>
       )}
 
-      {phase === 'done' && enrolledPerson && (
+      {phase === 'done' && result && (
         <div className="panel">
-          <p>
-            Enrolled <strong>{enrolledPerson.display_name}</strong> ({enrolledPerson.role ?? 'visitor'}).
-          </p>
+          {result.merged_into_existing ? (
+            <p>
+              This face already matched <strong>{result.person.display_name}</strong>
+              {result.matched_similarity != null && (
+                <span className="hint"> (similarity {result.matched_similarity})</span>
+              )}
+              {' '}— added {result.templates_added} pose template(s) to their gallery instead of
+              creating a duplicate.
+            </p>
+          ) : (
+            <p>
+              Enrolled <strong>{result.person.display_name}</strong> ({result.person.role ?? 'visitor'})
+              with {result.templates_added} pose template(s).
+            </p>
+          )}
           <button className="btn-primary" onClick={reset}>
             Enroll another
           </button>

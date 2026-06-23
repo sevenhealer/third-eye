@@ -42,12 +42,21 @@ class _Session:
     crops_total: int
     need: dict[str, int]
     embeddings: list[np.ndarray] = field(default_factory=list)
+    # embeddings grouped by pose bucket, so enrollment can store one template
+    # per angle (frontal/left/right/up/down) instead of averaging the side
+    # views away into a single centroid.
+    bucket_embeddings: dict[str, list[np.ndarray]] = field(default_factory=dict)
     created_at: float = field(default_factory=time.monotonic)
     last_capture: float = 0.0
 
     @property
     def pending(self) -> list[str]:
         return [name for name, n in self.need.items() if n > 0]
+
+    def pose_means(self) -> list[np.ndarray]:
+        """One averaged embedding per captured pose bucket — gives the gallery
+        pose-spanning templates rather than a single pose-averaged vector."""
+        return [np.mean(embs, axis=0) for embs in self.bucket_embeddings.values() if embs]
 
 
 class ManualEnrollCapture:
@@ -85,6 +94,7 @@ class ManualEnrollCapture:
             and now - session.last_capture >= CAPTURE_DEBOUNCE_S
         ):
             session.embeddings.append(embedding)
+            session.bucket_embeddings.setdefault(bucket, []).append(embedding)
             session.need[bucket] -= 1
             session.last_capture = now
             return bucket, True

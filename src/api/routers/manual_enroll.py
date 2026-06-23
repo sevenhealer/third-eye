@@ -17,13 +17,17 @@ from src.core.logging import get_logger
 from src.face_recognition.gallery import get_gallery
 from src.face_recognition.manual_enroll import POSE_BUCKETS, get_manual_enroll_capture
 from src.face_recognition.pose_detector import get_pose_detector
-from src.face_recognition.recognizer import l2_normalize
+from src.face_recognition.recognizer import ACCEPT_THRESHOLD, l2_normalize
 
 logger = get_logger(__name__)
 router = APIRouter()
 
 DEFAULT_CROPS = 10
 MANUAL_ENROLL_QUALITY = 0.85   # guided, well-framed capture - matches scripts/enroll.py
+# Auto-merge into an existing identity when the captured face matches one
+# at/above the live recognition accept line — re-enrolling someone already
+# known should grow THEIR gallery, not spawn a duplicate person.
+AUTO_MERGE_THRESHOLD = ACCEPT_THRESHOLD
 
 
 class SessionOut(BaseModel):
@@ -51,6 +55,13 @@ class FinalizeRequest(BaseModel):
     display_name: str | None = None   # required when creating a NEW person
     role: str = "visitor"
     person_id: UUID | None = None     # set to add this embedding to an existing person
+
+
+class FinalizeResult(BaseModel):
+    person: PersonOut
+    merged_into_existing: bool        # added to an already-enrolled identity?
+    matched_similarity: float | None  # set when auto-merged on a face match
+    templates_added: int              # gallery rows added (one per pose)
 
 
 @router.post("/sessions", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
@@ -126,14 +137,25 @@ async def discard_session(session_id: str, current_user: ActiveUser) -> None:
     get_manual_enroll_capture().discard(session_id)
 
 
-@router.post("/sessions/{session_id}/finalize", response_model=PersonOut,
+async def _fetch_person(db: AsyncSession, person_id: str):
+    return (await db.execute(
+        text("""
+            SELECT person_id, display_name, role, enrolled_at, is_active,
+                   last_seen_at, last_seen_zone, metadata
+            FROM persons WHERE person_id = :pid AND is_active
+        """),
+        {"pid": person_id},
+    )).fetchone()
+
+
+@router.post("/sessions/{session_id}/finalize", response_model=FinalizeResult,
              status_code=status.HTTP_201_CREATED)
 async def finalize_session(
     session_id: str,
     body: FinalizeRequest,
     current_user: ActiveUser,
     db: AsyncSession = Depends(get_db),
-) -> PersonOut:
+) -> FinalizeResult:
     current_user.require_role("admin")
     capture = get_manual_enroll_capture()
     session = capture.get(session_id)
@@ -145,43 +167,60 @@ async def finalize_session(
             detail=f"Capture incomplete: still need {', '.join(session.pending)}.",
         )
 
+    # One template per pose bucket (frontal/left/right/up/down), so the side
+    # views are stored as their own gallery rows rather than averaged away.
+    pose_embeddings = [l2_normalize(e) for e in session.pose_means()]
+    if not pose_embeddings:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="No usable captures in this session.")
+    # representative vector for the "is this already someone?" lookup
+    search_vec = l2_normalize(np.mean(pose_embeddings, axis=0))
+
+    person = None
+    merged_into_existing = False
+    matched_similarity: float | None = None
+
     if body.person_id is not None:
-        person = (await db.execute(
-            text("""
-                SELECT person_id, display_name, role, enrolled_at, is_active,
-                       last_seen_at, last_seen_zone, metadata
-                FROM persons WHERE person_id = :pid AND is_active
-            """),
-            {"pid": str(body.person_id)},
-        )).fetchone()
+        person = await _fetch_person(db, str(body.person_id))
         if person is None:
             raise HTTPException(status_code=404, detail="Target person not found or inactive.")
+        merged_into_existing = True
     else:
-        if not body.display_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="display_name required when creating a new person "
-                       "(or pass person_id to add to an existing one).",
-            )
-        person = (await db.execute(
-            text("""
-                INSERT INTO persons (display_name, role, enrolled_by)
-                VALUES (:name, :role, :uid)
-                RETURNING person_id, display_name, role, enrolled_at,
-                          is_active, last_seen_at, last_seen_zone, metadata
-            """),
-            {"name": body.display_name, "role": body.role,
-             "uid": str(current_user.user_id)},
-        )).fetchone()
-        await db.commit()
+        # auto-merge: if this face already belongs to someone (>= the live
+        # recognition accept line), grow their gallery instead of creating a
+        # duplicate identity.
+        matches = await get_gallery().search(search_vec, top_k=1)
+        if matches and matches[0].similarity >= AUTO_MERGE_THRESHOLD:
+            person = await _fetch_person(db, str(matches[0].person_id))
+            if person is not None:
+                merged_into_existing = True
+                matched_similarity = round(float(matches[0].similarity), 3)
+        if person is None:
+            if not body.display_name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="display_name required when creating a new person "
+                           "(or pass person_id to add to an existing one).",
+                )
+            person = (await db.execute(
+                text("""
+                    INSERT INTO persons (display_name, role, enrolled_by)
+                    VALUES (:name, :role, :uid)
+                    RETURNING person_id, display_name, role, enrolled_at,
+                              is_active, last_seen_at, last_seen_zone, metadata
+                """),
+                {"name": body.display_name, "role": body.role,
+                 "uid": str(current_user.user_id)},
+            )).fetchone()
+            await db.commit()
 
-    mean_embedding = l2_normalize(np.mean(session.embeddings, axis=0))
-    embedding_id = await get_gallery().add_embedding(
-        person_id=str(person.person_id),
-        embedding=mean_embedding,
-        quality_score=MANUAL_ENROLL_QUALITY,
-        camera_id="manual-enroll",
-    )
+    for emb in pose_embeddings:
+        await get_gallery().add_embedding(
+            person_id=str(person.person_id),
+            embedding=emb,
+            quality_score=MANUAL_ENROLL_QUALITY,
+            camera_id="manual-enroll",
+        )
     capture.discard(session_id)
 
     await write_audit_event(
@@ -190,11 +229,13 @@ async def finalize_session(
         actor_username=current_user.username,
         resource_type="person",
         resource_id=str(person.person_id),
-        details={"display_name": person.display_name, "embedding_id": embedding_id,
-                 "crop_count": len(session.embeddings), "merged": body.person_id is not None},
+        details={"display_name": person.display_name,
+                 "templates_added": len(pose_embeddings),
+                 "merged_into_existing": merged_into_existing,
+                 "matched_similarity": matched_similarity},
     )
 
-    return PersonOut(
+    person_out = PersonOut(
         person_id=person.person_id,
         display_name=person.display_name,
         role=person.role,
@@ -203,4 +244,10 @@ async def finalize_session(
         last_seen_at=person.last_seen_at.isoformat() if getattr(person, "last_seen_at", None) else None,
         last_seen_zone=getattr(person, "last_seen_zone", None),
         metadata=person.metadata or {},
+    )
+    return FinalizeResult(
+        person=person_out,
+        merged_into_existing=merged_into_existing,
+        matched_similarity=matched_similarity,
+        templates_added=len(pose_embeddings),
     )
