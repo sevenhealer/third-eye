@@ -32,7 +32,29 @@
   .cam-tile, .panel {
     background: #161b22; border: 1px solid #2a2f37; border-radius: 8px; overflow: hidden;
   }
+  .cam-tile { cursor: pointer; }
   .cam-tile img { width: 100%; display: block; background: #000; aspect-ratio: 16/9; object-fit: contain; }
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    z-index: 50; align-items: center; justify-content: center;
+  }
+  .modal-box {
+    background: #161b22; border: 1px solid #2a2f37; border-radius: 8px; padding: 14px;
+  }
+  .modal-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px; gap: 12px;
+  }
+  .modal-head button {
+    padding: 4px 10px; background: #2a2f37; color: #e6e6e6; border: none;
+    border-radius: 4px; cursor: pointer;
+  }
+  #merge-search {
+    margin-bottom: 8px; padding: 7px; background: #0e1116; color: #e6e6e6;
+    border: 1px solid #2a2f37; border-radius: 4px; box-sizing: border-box; width: 100%;
+  }
+  .merge-row { padding: 8px; border-bottom: 1px solid #2a2f37; cursor: pointer; font-size: 13px; }
+  .merge-row:hover { background: #1c2128; }
   .cam-tile .label {
     display: flex; justify-content: space-between; padding: 6px 10px; font-size: 13px;
   }
@@ -68,6 +90,7 @@
   }
   .btn-approve { background: #16a34a; }
   .btn-merge { background: #2563eb; }
+  .btn-merge-other { background: #1d4ed8; }
   .btn-reject { background: #dc2626; }
 </style>
 </head>
@@ -114,6 +137,27 @@
   </section>
 </main>
 
+<div id="live-modal" class="modal-overlay" onclick="if(event.target===this) closeLiveView()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <strong id="live-modal-title"></strong>
+      <button onclick="closeLiveView()">Close</button>
+    </div>
+    <img id="live-modal-img" style="max-width:85vw; max-height:80vh; display:block; background:#000;">
+  </div>
+</div>
+
+<div id="merge-modal" class="modal-overlay" onclick="if(event.target===this) closeMergePicker()">
+  <div class="modal-box" style="width:320px; max-height:70vh; display:flex; flex-direction:column;">
+    <div class="modal-head">
+      <strong>Merge into…</strong>
+      <button onclick="closeMergePicker()">Close</button>
+    </div>
+    <input id="merge-search" placeholder="Search people..." oninput="renderMergeList()">
+    <div id="merge-list" style="overflow-y:auto; flex:1;"></div>
+  </div>
+</div>
+
 <script>
 let token = sessionStorage.getItem('te_token');
 let ws = null;
@@ -158,22 +202,86 @@ function enterDashboard() {
   setInterval(refreshCandidates, 4000);
 }
 
+// Preloads a new image off-DOM and only swaps the visible <img>'s src once
+// it has actually finished loading, so the old frame stays on screen the
+// whole time instead of flashing blank/black every poll tick.
+function swapImageNoFlicker(imgEl, newSrc) {
+  const probe = new Image();
+  probe.onload = () => { imgEl.src = newSrc; imgEl.style.opacity = 1; };
+  probe.onerror = () => { imgEl.style.opacity = 0.3; };
+  probe.src = newSrc;
+}
+
+const cameraTiles = {};   // camera_id -> live DOM refs, built once and updated in place
+
 async function refreshCameras() {
   const res = await fetch('/api/v1/cameras', { headers: authHeaders() });
   if (res.status === 401) return logout();
   const cams = await res.json();
   const root = document.getElementById('cameras');
-  root.innerHTML = cams.map(c => `
-    <div class="cam-tile">
-      <img src="/stream/${c.camera_id}/latest.jpg?t=${Date.now()}"
-           onerror="this.style.opacity=0.3"
-           onload="this.style.opacity=1">
-      <div class="label">
-        <span><span class="status-dot status-${c.status}"></span>${c.display_name}</span>
-        <span>${c.zone_id || ''}</span>
-      </div>
-    </div>
-  `).join('') || '<div class="empty">No cameras registered.</div>';
+
+  if (!cams.length) {
+    root.innerHTML = '<div class="empty">No cameras registered.</div>';
+    return;
+  }
+  if (root.querySelector('.empty')) root.innerHTML = '';
+
+  const seen = new Set();
+  for (const c of cams) {
+    seen.add(c.camera_id);
+    let t = cameraTiles[c.camera_id];
+    if (!t) {
+      const div = document.createElement('div');
+      div.className = 'cam-tile';
+      div.innerHTML = `
+        <img>
+        <div class="label">
+          <span><span class="status-dot"></span><span class="cam-name"></span></span>
+          <span class="cam-zone"></span>
+        </div>`;
+      div.onclick = () => openLiveView(c.camera_id, t.name.textContent);
+      root.appendChild(div);
+      t = cameraTiles[c.camera_id] = {
+        root: div,
+        img: div.querySelector('img'),
+        dot: div.querySelector('.status-dot'),
+        name: div.querySelector('.cam-name'),
+        zone: div.querySelector('.cam-zone'),
+      };
+    }
+    t.dot.className = `status-dot status-${c.status}`;
+    t.name.textContent = c.display_name;
+    t.zone.textContent = c.zone_id || '';
+    swapImageNoFlicker(t.img, `/stream/${c.camera_id}/latest.jpg?t=${Date.now()}`);
+  }
+
+  for (const camId of Object.keys(cameraTiles)) {
+    if (!seen.has(camId)) {
+      cameraTiles[camId].root.remove();
+      delete cameraTiles[camId];
+    }
+  }
+}
+
+let liveViewInterval = null;
+
+function openLiveView(cameraId, displayName) {
+  document.getElementById('live-modal-title').textContent = displayName || cameraId;
+  document.getElementById('live-modal').style.display = 'flex';
+  const img = document.getElementById('live-modal-img');
+  img.src = '';
+  const tick = () => swapImageNoFlicker(img, `/stream/${cameraId}/latest.jpg?t=${Date.now()}`);
+  tick();
+  // run_live.py only writes a new snapshot every ~10 frames (~0.67s @15fps),
+  // so polling faster than that gains nothing — 600ms keeps it feeling live
+  // without hammering the endpoint for unchanged bytes.
+  liveViewInterval = setInterval(tick, 600);
+}
+
+function closeLiveView() {
+  document.getElementById('live-modal').style.display = 'none';
+  if (liveViewInterval) clearInterval(liveViewInterval);
+  liveViewInterval = null;
 }
 
 async function refreshZones() {
@@ -223,8 +331,9 @@ async function refreshCandidates() {
         <div class="cand-actions">
           <button class="btn-approve" onclick="approveCandidate('${c.candidate_id}')">New person</button>
           ${c.suggested_person_id
-            ? `<button class="btn-merge" onclick="mergeCandidate('${c.candidate_id}', '${c.suggested_person_id}', '${c.suggested_name}')">Merge</button>`
+            ? `<button class="btn-merge" onclick="mergeCandidate('${c.candidate_id}', '${c.suggested_person_id}', '${c.suggested_name}')">Merge → ${c.suggested_name}</button>`
             : ''}
+          <button class="btn-merge-other" onclick="openMergePicker('${c.candidate_id}')">Merge to other…</button>
           <button class="btn-reject" onclick="rejectCandidate('${c.candidate_id}')">Reject</button>
         </div>
       </div>
@@ -247,7 +356,47 @@ async function approveCandidate(candidateId) {
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ display_name: name }),
   });
+  mergeAllPersons = [];   // a new person now exists — refetch next time the picker opens
   refreshCandidates();
+}
+
+let mergeTargetCandidateId = null;
+let mergeAllPersons = [];   // fetched once per page session, invalidated on new-person approval
+
+async function openMergePicker(candidateId) {
+  mergeTargetCandidateId = candidateId;
+  document.getElementById('merge-search').value = '';
+  if (!mergeAllPersons.length) {
+    const res = await fetch('/api/v1/identities', { headers: authHeaders() });
+    mergeAllPersons = res.ok ? await res.json() : [];
+  }
+  document.getElementById('merge-modal').style.display = 'flex';
+  renderMergeList();
+}
+
+function closeMergePicker() {
+  document.getElementById('merge-modal').style.display = 'none';
+  mergeTargetCandidateId = null;
+}
+
+function renderMergeList() {
+  const q = document.getElementById('merge-search').value.trim().toLowerCase();
+  const list = document.getElementById('merge-list');
+  const matches = mergeAllPersons.filter(p => p.display_name.toLowerCase().includes(q));
+  list.innerHTML = '';
+  if (!matches.length) {
+    list.innerHTML = '<div class="empty">No match.</div>';
+    return;
+  }
+  for (const p of matches) {
+    const row = document.createElement('div');
+    row.className = 'merge-row';
+    row.textContent = p.display_name;
+    // closure + textContent, not a template-string onclick attribute, so a
+    // display_name containing a quote/apostrophe can't break the handler.
+    row.onclick = () => { mergeCandidate(mergeTargetCandidateId, p.person_id, p.display_name); closeMergePicker(); };
+    list.appendChild(row);
+  }
 }
 
 async function mergeCandidate(candidateId, personId, name) {
