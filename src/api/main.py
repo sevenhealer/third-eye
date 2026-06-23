@@ -14,6 +14,7 @@ from src.core.config import get_settings
 from src.core.database import close_all, get_neo4j_driver, get_redis
 from src.core.exceptions import AuthorizationError, PromptInjectionError, ThirdEyeError
 from src.core.logging import configure_logging, get_logger
+from src.orchestration.supervisor import CameraSupervisor
 
 settings = get_settings()
 configure_logging(settings.app_log_level)
@@ -28,9 +29,13 @@ async def lifespan(app: FastAPI):
     # Warm up connections
     await get_redis()
     get_neo4j_driver()
+    supervisor = CameraSupervisor()
+    await supervisor.start()
+    app.state.supervisor = supervisor
     logger.info("third_eye_ready")
     yield
     logger.info("third_eye_shutting_down")
+    await supervisor.stop()
     await close_all()
 
 
@@ -46,7 +51,7 @@ app = FastAPI(
 # ── CORS (restrict in production) ─────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"] if not settings.is_production else [],
+    allow_origins=["http://localhost:3000", "http://localhost:5173"] if not settings.is_production else [],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +70,12 @@ app.mount("/stream", StaticFiles(directory=str(_SNAPSHOTS_DIR)), name="stream")
 _DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "dashboard"
 if _DASHBOARD_DIR.is_dir():
     app.mount("/dashboard", StaticFiles(directory=str(_DASHBOARD_DIR), html=True), name="dashboard")
+
+# ── Settings app (React+Vite build output; reads the same sessionStorage
+# token the dashboard writes, no separate login) ──────────────────────────────
+_SETTINGS_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "settings" / "dist"
+if _SETTINGS_DIR.is_dir():
+    app.mount("/settings", StaticFiles(directory=str(_SETTINGS_DIR), html=True), name="settings")
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 

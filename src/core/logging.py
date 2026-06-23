@@ -22,6 +22,12 @@ def configure_logging(log_level: str = "INFO") -> None:
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
+        # logger.exception(...)/log.error(..., exc_info=True) set an
+        # exc_info flag that JSONRenderer alone can't serialize - without
+        # this, every traceback in the whole app silently vanishes into
+        # just `"exc_info": true` (found while debugging the camera
+        # supervisor). format_exc_info renders it into an "exception" key.
+        structlog.processors.format_exc_info,
         _add_severity,
     ]
 
