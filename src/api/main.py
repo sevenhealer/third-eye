@@ -143,7 +143,7 @@ async def health() -> dict:
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-from src.api.routers import auth, cameras, identities, events, queries, alerts, admin, zones, hardware  # noqa: E402
+from src.api.routers import auth, cameras, identities, events, queries, alerts, admin, zones, hardware, manual_enroll  # noqa: E402
 
 app.include_router(auth.router,        prefix="/api/v1/auth",        tags=["auth"])
 app.include_router(cameras.router,     prefix="/api/v1/cameras",     tags=["cameras"])
@@ -154,3 +154,4 @@ app.include_router(alerts.router,      prefix="/api/v1/alerts",       tags=["ale
 app.include_router(admin.router,       prefix="/api/v1/admin",        tags=["admin"])
 app.include_router(hardware.router,    prefix="/api/v1/hardware",     tags=["hardware"])
 app.include_router(zones.router,       prefix="/api/v1/zones",        tags=["zones"])
+app.include_router(manual_enroll.router, prefix="/api/v1/manual-enroll", tags=["manual-enroll"])

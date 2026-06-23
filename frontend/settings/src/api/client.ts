@@ -248,3 +248,44 @@ export function mjpegUrl(cameraId: string): string {
   const token = getToken() || ''
   return `/api/v1/cameras/${cameraId}/mjpeg?token=${encodeURIComponent(token)}`
 }
+
+export interface EnrollPoseBucket {
+  key: string
+  label: string
+  needed: number
+}
+
+export interface EnrollSession {
+  session_id: string
+  pose_buckets: EnrollPoseBucket[]
+}
+
+export interface EnrollFrameResult {
+  face_found: boolean
+  yaw: number | null
+  pitch: number | null
+  bucket: string | null
+  captured: boolean
+  progress: number
+  total: number
+  pending: string[]
+  done: boolean
+}
+
+export const createEnrollSession = (crops = 10) =>
+  apiFetch<EnrollSession>(`/api/v1/manual-enroll/sessions?crops=${crops}`, { method: 'POST' })
+export const submitEnrollFrame = (sessionId: string, imageB64: string) =>
+  apiFetch<EnrollFrameResult>(`/api/v1/manual-enroll/sessions/${sessionId}/frame`, {
+    method: 'POST',
+    body: JSON.stringify({ image_b64: imageB64 }),
+  })
+export const discardEnrollSession = (sessionId: string) =>
+  apiFetch(`/api/v1/manual-enroll/sessions/${sessionId}`, { method: 'DELETE' })
+export const finalizeEnrollSession = (
+  sessionId: string,
+  body: { display_name?: string; role?: string; person_id?: string },
+) =>
+  apiFetch<Person>(`/api/v1/manual-enroll/sessions/${sessionId}/finalize`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })

@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ZonesPage } from './pages/ZonesPage'
 import { CandidatesPage } from './pages/CandidatesPage'
+import { EnrollPage } from './pages/EnrollPage'
 import { AlertsPage } from './pages/AlertsPage'
 import { CamerasPage } from './pages/CamerasPage'
 import { HardwarePage } from './pages/HardwarePage'
@@ -22,6 +23,7 @@ function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/zones" element={<ZonesPage />} />
               <Route path="/candidates" element={<CandidatesPage />} />
+              <Route path="/enroll" element={<EnrollPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/cameras" element={<CamerasPage />} />
               <Route path="/hardware" element={<HardwarePage />} />

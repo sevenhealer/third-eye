@@ -224,3 +224,21 @@ hr { border: none; border-top: 1px solid #2a2f37; margin: 12px 0; }
 .link-list li { padding: 6px 0; border-bottom: 1px solid #2a2f37; }
 .link-list li:last-child { border-bottom: none; }
 .link-list a { color: #60a5fa; }
+
+.enroll-capture { display: flex; gap: 18px; flex-wrap: wrap; }
+.enroll-video {
+  width: 360px; max-width: 100%; aspect-ratio: 4/3; background: #000;
+  border-radius: 6px; object-fit: cover; transform: scaleX(-1);
+}
+.enroll-status { flex: 1; min-width: 220px; }
+.enroll-progress-bar { height: 8px; background: #0e1116; border-radius: 4px; overflow: hidden; margin-bottom: 6px; }
+.enroll-progress-fill { height: 100%; background: #2563eb; transition: width 0.2s ease; }
+.enroll-progress-label { font-size: 12px; color: #9ca3af; margin-bottom: 10px; }
+.enroll-prompt { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.enroll-pose-list { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.badge-done { background: #14532d; color: #86efac; }
+.enroll-finalize-form { display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin-top: 10px; }
+.enroll-finalize-form input {
+  padding: 8px; background: #0e1116; color: #e6e6e6;
+  border: 1px solid #2a2f37; border-radius: 4px; box-sizing: border-box;
+}

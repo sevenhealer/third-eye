@@ -1,33 +1,19 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   type Candidate,
-  type Person,
   listCandidates,
   approveCandidate,
   mergeCandidate,
   rejectCandidate,
-  listIdentities,
   fetchCropBlobUrl,
 } from '../api/client'
+import { PersonPickerModal } from '../components/PersonPicker'
+import { invalidatePersonsCache } from '../api/personsCache'
 
 // candidate_id -> blob URL, fetched once per page session (mirrors the
 // vanilla dashboard's candImageCache) - module-level so it survives
 // across the 4s poll's re-renders without re-fetching.
 const cropUrlCache = new Map<string, string>()
-
-// All enrolled persons, fetched lazily the first time a merge picker
-// opens and cached until a new person is approved (mirrors vanilla's
-// mergeAllPersons).
-let allPersonsCache: Person[] | null = null
-function invalidatePersonsCache() {
-  allPersonsCache = null
-}
-async function getAllPersons(): Promise<Person[]> {
-  if (allPersonsCache === null) {
-    allPersonsCache = await listIdentities()
-  }
-  return allPersonsCache
-}
 
 function useCandidateCropUrl(candidateId: string, cropUrl: string | undefined): string | undefined {
   const [url, setUrl] = useState<string | undefined>(cropUrlCache.get(candidateId))
@@ -154,61 +140,7 @@ function CandidateCard({ candidate, onAction }: { candidate: Candidate; onAction
           </button>
         </div>
       </div>
-      {showPicker && <MergePickerModal onClose={() => setShowPicker(false)} onPick={handlePick} />}
-    </div>
-  )
-}
-
-function MergePickerModal({
-  onClose,
-  onPick,
-}: {
-  onClose: () => void
-  onPick: (personId: string, name: string) => void
-}) {
-  const [persons, setPersons] = useState<Person[]>([])
-  const [query, setQuery] = useState('')
-
-  useEffect(() => {
-    getAllPersons().then(setPersons)
-  }, [])
-
-  const matches = persons.filter((p) => p.display_name.toLowerCase().includes(query.trim().toLowerCase()))
-
-  return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box" style={{ width: 320, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
-        <div className="modal-head">
-          <strong>Merge into…</strong>
-          <button onClick={onClose}>Close</button>
-        </div>
-        <input
-          autoFocus
-          placeholder="Search people..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{
-            marginBottom: 8,
-            padding: 7,
-            background: '#0e1116',
-            color: '#e6e6e6',
-            border: '1px solid #2a2f37',
-            borderRadius: 4,
-            boxSizing: 'border-box',
-          }}
-        />
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {matches.length ? (
-            matches.map((p) => (
-              <div key={p.person_id} className="merge-row" onClick={() => onPick(p.person_id, p.display_name)}>
-                {p.display_name}
-              </div>
-            ))
-          ) : (
-            <div className="empty">No match.</div>
-          )}
-        </div>
-      </div>
+      {showPicker && <PersonPickerModal onClose={() => setShowPicker(false)} onPick={handlePick} />}
     </div>
   )
 }
