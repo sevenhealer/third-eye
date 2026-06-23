@@ -13,9 +13,6 @@ export function SystemPage() {
         <h3>Links</h3>
         <ul className="link-list">
           <li>
-            <a href="/dashboard/" >Operator dashboard</a> — live camera grid, zones, enrollment review
-          </li>
-          <li>
             <a href="http://localhost:3000" target="_blank" rel="noreferrer">
               Grafana
             </a>{' '}
@@ -32,6 +29,12 @@ export function SystemPage() {
                 <a href="/metrics" target="_blank" rel="noreferrer">
                   Prometheus /metrics
                 </a>
+              </li>
+              <li>
+                <a href="/dashboard-legacy/" target="_blank" rel="noreferrer">
+                  Legacy dashboard
+                </a>{' '}
+                — the original vanilla-JS version, kept as a rollback path during burn-in
               </li>
             </>
           )}
