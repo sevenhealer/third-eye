@@ -1,5 +1,5 @@
 .PHONY: help up down logs shell test lint format check-env setup install install-gpu \
-        infra reset serve stop frontend-build fresh
+        infra reset serve stop frontend-build fresh run
 
 COMPOSE = docker compose
 APP_SERVICE = api
@@ -17,8 +17,9 @@ help:
 	@echo "  ── one-command dev (app runs natively, infra in Docker) ──"
 	@echo "  make install      Install deps into .venv (Mac / CPU dev)"
 	@echo "  make install-gpu  Install deps into .venv (Linux + NVIDIA GPU)"
+	@echo "  make run          Run EVERYTHING (infra + UI build + API), keeps data"
 	@echo "  make fresh        CLEAN SLATE: stop, wipe all data, rebuild UI, run"
-	@echo "  make serve        Run the API server (foreground; Ctrl+C stops it)"
+	@echo "  make serve        Run only the API server (foreground; Ctrl+C stops it)"
 	@echo "  make reset        DESTRUCTIVE: wipe all data, reseed admin/admin + zones"
 	@echo "  make stop         Stop the native API server + camera workers"
 	@echo "  make infra        Start just the infra containers"
@@ -62,6 +63,15 @@ infra: check-env
 
 frontend-build:
 	cd frontend/settings && npm install && npm run build
+
+# Run the whole system (infra + frontend bundle + API), keeping existing
+# data. This is the everyday "bring it all up" command. Use `make fresh`
+# instead when you want a wiped clean slate first. If port 8000 is already
+# in use, `make stop` first.
+run: infra frontend-build
+	@echo ""
+	@echo "  Backend + frontend coming up.  Dashboard: http://localhost:8000/settings/"
+	@$(MAKE) serve
 
 reset: infra
 	@echo "Wiping ALL data (embeddings, persons, cameras, events, crops) ..."
