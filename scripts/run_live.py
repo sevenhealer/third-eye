@@ -875,6 +875,29 @@ async def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        # A graceful stop (SIGTERM/Ctrl+C) still drops out of the frame
+        # loop mid-track - anyone currently "entered" never gets a
+        # PERSON_EXITED, so their zone_presence row was staying open
+        # forever (exit_time NULL) even though the process that would
+        # have closed it is gone. Found live: a zone changed via Settings
+        # (which restarts the process) left the old zone's rows stuck
+        # open. Close them explicitly here instead of abandoning them.
+        if event_store is not None and presence_rows:
+            now_ns = time.time_ns()
+            for tid, row_id in list(presence_rows.items()):
+                try:
+                    await event_store.close_presence(row_id, now_ns)
+                except Exception as exc:
+                    print(f"  ! failed to close presence row {row_id} (track {tid}) on shutdown: {exc}")
+                if stm is not None:
+                    label_entry = track_labels.get(tid)
+                    pid = label_entry[4] if label_entry else None
+                    if pid:
+                        try:
+                            await stm.remove_zone_occupant(args.zone_id, pid)
+                        except Exception:
+                            pass
+            print(f"  closed {len(presence_rows)} still-open zone_presence row(s) on shutdown")
         if delivery is not None:
             await delivery.drain()
         camera.release()

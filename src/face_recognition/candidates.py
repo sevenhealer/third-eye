@@ -33,6 +33,7 @@ class _UnknownTrack:
     first_seen: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     persisted: bool = False
+    recognized_streak: int = 0   # consecutive frames seen as recognized, not unknown
 
 
 @dataclass
@@ -56,6 +57,16 @@ class CandidateCapture:
     into an existing *pending* candidate when the faces match
     (similarity >= 0.45), so the same stranger seen twice stays ONE
     review item instead of multiplying.
+
+    A borderline-similarity track (live-confirmed: an object whose
+    gallery match hovers right at the accept threshold) can flip
+    `is_unknown` True/False frame-to-frame. Clearing all accumulated
+    evidence on a *single* recognized frame meant such a track could
+    flip back to unknown before ever crossing min_crops/min_span_sec,
+    repeatedly discarding real progress and never becoming a candidate
+    at all - recognized_clear_streak requires several *consecutive*
+    recognized frames (not just one) before treating it as genuinely,
+    stably resolved.
     """
 
     def __init__(
@@ -64,12 +75,14 @@ class CandidateCapture:
         min_crops: int = 5,
         min_span_sec: float = 3.0,
         max_stored_crops: int = 5,
+        recognized_clear_streak: int = 5,
         object_store: ObjectStore | None = None,
     ) -> None:
         self.camera_id = camera_id
         self.min_crops = min_crops
         self.min_span_sec = min_span_sec
         self.max_stored_crops = max_stored_crops
+        self.recognized_clear_streak = recognized_clear_streak
         # object store for face crops; falls back to the configured singleton
         self._store = object_store if object_store is not None else get_object_store()
         self._tracks: dict[int, _UnknownTrack] = {}
@@ -85,11 +98,16 @@ class CandidateCapture:
         crop: bytes | None = None,
     ) -> None:
         if not is_unknown:
-            self._tracks.pop(track_id, None)   # got recognized — not a candidate
+            st = self._tracks.get(track_id)
+            if st is not None:
+                st.recognized_streak += 1
+                if st.recognized_streak >= self.recognized_clear_streak:
+                    self._tracks.pop(track_id, None)
             return
         if embedding is None or not good_view:
             return
         st = self._tracks.setdefault(track_id, _UnknownTrack())
+        st.recognized_streak = 0   # genuinely unknown again - reset the streak
         if st.persisted:
             st.last_seen = time.time()
             return

@@ -60,3 +60,36 @@ def test_bad_view_not_captured():
 def test_upload_crops_noop_when_store_disabled():
     cap = _capture()
     assert cap._upload_crops([b"a", b"b"]) == []
+
+
+def test_single_recognized_blip_does_not_discard_progress():
+    """Live-found bug: a borderline-similarity track (gallery match
+    hovering at the accept threshold) flips is_unknown True/False frame
+    to frame. A single recognized frame used to wipe all accumulated
+    evidence immediately, so such a track could flip back to unknown
+    before ever reaching min_crops/min_span_sec - never becoming a
+    candidate despite real cumulative time spent unknown."""
+    cap = _capture(min_crops=3, recognized_clear_streak=5)
+    cap.observe(1, _emb(0), is_unknown=True, good_view=True, quality=0.8, crop=b"a")
+    cap.observe(1, _emb(1), is_unknown=True, good_view=True, quality=0.8, crop=b"b")
+    # one noisy "recognized" frame - should NOT clear progress
+    cap.observe(1, _emb(2), is_unknown=False, good_view=True, quality=0.8)
+    cap.observe(1, _emb(3), is_unknown=True, good_view=True, quality=0.8, crop=b"c")
+    drafts = cap.due()
+    assert len(drafts) == 1
+    assert len(drafts[0].crops) == 3
+
+
+def test_sustained_recognized_streak_still_clears_progress():
+    """A track that's genuinely, stably recognized (a real streak, not
+    one noisy frame) must still be dropped - this isn't a license for
+    enrollment candidates to outlive real recognition."""
+    cap = _capture(min_crops=3, recognized_clear_streak=3)
+    cap.observe(1, _emb(0), is_unknown=True, good_view=True, quality=0.8, crop=b"a")
+    cap.observe(1, _emb(1), is_unknown=True, good_view=True, quality=0.8, crop=b"b")
+    for _ in range(3):
+        cap.observe(1, _emb(2), is_unknown=False, good_view=True, quality=0.8)
+    assert 1 not in cap._tracks
+    cap.observe(1, _emb(3), is_unknown=True, good_view=True, quality=0.8, crop=b"c")
+    # progress was discarded - this is a fresh start, not yet due
+    assert cap.due() == []
