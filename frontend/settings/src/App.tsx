@@ -37,6 +37,9 @@ function App() {
           </button>
         </nav>
         <AdvancedToggle />
+        <a href="/dashboard/" className="dashboard-link">
+          Dashboard
+        </a>
       </header>
       <main className="settings-main">
         {tab === 'cameras' && <CamerasPage />}

@@ -110,6 +110,8 @@ export const updateCamera = (id: string, body: Record<string, unknown>) =>
 export const startCamera = (id: string) => apiFetch(`/api/v1/cameras/${id}/start`, { method: 'POST' })
 export const stopCamera = (id: string) => apiFetch(`/api/v1/cameras/${id}/stop`, { method: 'POST' })
 export const deleteCamera = (id: string) => apiFetch(`/api/v1/cameras/${id}`, { method: 'DELETE' })
+export const getCameraLog = (id: string) =>
+  apiFetch<{ lines: string[]; message?: string }>(`/api/v1/cameras/${id}/log?lines=80`)
 
 export const listGpus = () => apiFetch<GpuStat[]>('/api/v1/hardware/gpus')
 export const getSystemStats = () => apiFetch<SystemStats>('/api/v1/hardware/system')

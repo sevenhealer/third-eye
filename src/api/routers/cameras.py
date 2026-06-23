@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -371,6 +372,36 @@ async def delete_camera(
         resource_type="camera", resource_id=camera_id,
     )
     return {"message": "Camera deactivated."}
+
+
+_LOG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "logs"
+
+
+@router.get("/{camera_id}/log")
+async def get_camera_log(
+    camera_id: str,
+    current_user: ActiveUser,
+    db: AsyncSession = Depends(get_db),
+    lines: int = Query(80, le=1000),
+) -> dict:
+    """Tail of this camera's run_live.py stdout/stderr - the actual reason
+    behind a 'crashed' status (bad RTSP credentials, wrong GPU index, model
+    load failure, ...). camera_process_status.last_error only has the exit
+    code/timing, not the process's own error output; this is that gap.
+    Looks the camera up in the DB first (rather than trusting the path
+    param directly) so a nonexistent/foreign camera_id can't be used to
+    probe the filesystem."""
+    row = (await db.execute(
+        text("SELECT 1 FROM cameras WHERE camera_id = :camera_id"), {"camera_id": camera_id}
+    )).fetchone()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found.")
+
+    log_path = _LOG_DIR / f"{camera_id}.log"
+    if not log_path.is_file():
+        return {"lines": [], "message": "No log file yet - this camera has never been started."}
+    text_content = log_path.read_text(errors="replace").splitlines()
+    return {"lines": text_content[-lines:]}
 
 
 @router.websocket("/{camera_id}/status-ws")

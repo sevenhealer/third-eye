@@ -110,7 +110,10 @@
 
 <header style="display:none" id="topbar">
   <h1>Third-Eye Operator Dashboard</h1>
-  <button onclick="logout()">Sign out</button>
+  <div style="display:flex; gap:8px;">
+    <a href="/settings/" style="padding:8px 14px; background:#2a2f37; color:#e6e6e6; border-radius:4px; font-size:13px; text-decoration:none;">Settings</a>
+    <button onclick="logout()">Sign out</button>
+  </div>
 </header>
 
 <main id="main">

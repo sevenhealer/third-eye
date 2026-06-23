@@ -11,6 +11,7 @@ import {
   startCamera,
   stopCamera,
   deleteCamera,
+  getCameraLog,
   listGpus,
 } from '../api/client'
 import { CameraForm, type CameraFormSubmit } from '../components/CameraForm'
@@ -29,6 +30,9 @@ export function CamerasPage() {
   const [editing, setEditing] = useState<CameraDetail | undefined>(undefined)
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState('')
+  const [viewingLog, setViewingLog] = useState<string | undefined>(undefined)
+  const [logLines, setLogLines] = useState<string[]>([])
+  const [logMessage, setLogMessage] = useState('')
 
   const refresh = useCallback(async () => {
     try {
@@ -93,6 +97,20 @@ export function CamerasPage() {
     }
   }
 
+  async function openLog(cameraId: string) {
+    setError('')
+    setViewingLog(cameraId)
+    setLogLines([])
+    setLogMessage('Loading…')
+    try {
+      const res = await getCameraLog(cameraId)
+      setLogLines(res.lines)
+      setLogMessage(res.lines.length ? '' : res.message || 'No log output yet.')
+    } catch (e) {
+      setLogMessage(e instanceof Error ? e.message : 'Failed to load log.')
+    }
+  }
+
   async function handleDelete(cameraId: string) {
     if (!confirm(`Remove ${cameraId}? Its history is kept, it just stops showing up here.`)) return
     setError('')
@@ -136,7 +154,14 @@ export function CamerasPage() {
               {advanced && <td>{cam.gpu_id != null ? `GPU ${cam.gpu_id}` : 'CPU/auto'}</td>}
               <td>
                 {cam.process_state || cam.desired_state}
-                {cam.process_state === 'crashed' && ' ⚠'}
+                {cam.process_state === 'crashed' && (
+                  <>
+                    {' ⚠ '}
+                    <button className="link-button" onClick={() => openLog(cam.camera_id)}>
+                      why?
+                    </button>
+                  </>
+                )}
               </td>
               <td className="row-actions">
                 {cam.desired_state === 'running' ? (
@@ -145,6 +170,7 @@ export function CamerasPage() {
                   <button onClick={() => handleStart(cam.camera_id)}>Start</button>
                 )}
                 <button onClick={() => openEdit(cam.camera_id)}>Edit</button>
+                <button onClick={() => openLog(cam.camera_id)}>Log</button>
                 <button className="btn-danger" onClick={() => handleDelete(cam.camera_id)}>
                   Remove
                 </button>
@@ -164,6 +190,21 @@ export function CamerasPage() {
       {adding && <CameraForm gpus={gpus} onSubmit={handleCreate} onCancel={() => setAdding(false)} />}
       {editing && (
         <CameraForm existing={editing} gpus={gpus} onSubmit={handleSaveEdit} onCancel={() => setEditing(undefined)} />
+      )}
+      {viewingLog && (
+        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setViewingLog(undefined)}>
+          <div className="modal-box log-modal">
+            <div className="modal-head">
+              <strong>{viewingLog} — log (last {logLines.length || 80} lines)</strong>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => openLog(viewingLog)}>Refresh</button>
+                <button onClick={() => setViewingLog(undefined)}>Close</button>
+              </div>
+            </div>
+            {logMessage && <div className="hint">{logMessage}</div>}
+            <pre className="log-output">{logLines.join('\n')}</pre>
+          </div>
+        </div>
       )}
     </div>
   )
