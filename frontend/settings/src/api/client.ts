@@ -131,10 +131,12 @@ function authHeaders(): Record<string, string> {
 // The access token is short-lived (15 min) by design; a single shared
 // in-flight refresh avoids every concurrent 401'd request racing its own
 // /refresh call. Falls back to the login bounce if there's no refresh
-// token or it's also expired (7-day lifetime).
+// token or it's also expired (7-day lifetime). Exported so the WebSocket
+// layer can reuse it: a long-lived WS rejected at the handshake (close
+// 4401) needs the same fresh token before it reconnects.
 let refreshPromise: Promise<boolean> | null = null
 
-function tryRefresh(): Promise<boolean> {
+export function refreshAccessToken(): Promise<boolean> {
   const refreshToken = sessionStorage.getItem('te_refresh')
   if (!refreshToken) return Promise.resolve(false)
   if (!refreshPromise) {
@@ -168,7 +170,7 @@ async function apiFetch<T>(path: string, options: RequestInit = {}, _retried = f
     },
   })
   if (res.status === 401) {
-    if (!_retried && (await tryRefresh())) {
+    if (!_retried && (await refreshAccessToken())) {
       return apiFetch<T>(path, options, true)
     }
     sessionStorage.removeItem('te_token')

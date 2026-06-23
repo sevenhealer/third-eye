@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { wsUrl } from '../api/client'
+import { useCallback, useState } from 'react'
+import { useReconnectingWebSocket } from '../api/useReconnectingWebSocket'
 
 interface AlertMessage {
   alert_id?: string
@@ -15,18 +15,11 @@ const MAX_ALERTS = 100
 
 export function AlertsPage() {
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
-  const [connected, setConnected] = useState(false)
 
-  useEffect(() => {
-    const ws = new WebSocket(wsUrl('/api/v1/alerts/ws'))
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onmessage = (ev) => {
-      const a = JSON.parse(ev.data) as AlertMessage
-      setAlerts((prev) => [a, ...prev].slice(0, MAX_ALERTS))
-    }
-    return () => ws.close()
+  const onMessage = useCallback((data: unknown) => {
+    setAlerts((prev) => [data as AlertMessage, ...prev].slice(0, MAX_ALERTS))
   }, [])
+  const connected = useReconnectingWebSocket('/api/v1/alerts/ws', onMessage)
 
   return (
     <div>

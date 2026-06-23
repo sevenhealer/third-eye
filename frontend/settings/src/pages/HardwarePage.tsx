@@ -1,22 +1,16 @@
-import { useEffect, useState } from 'react'
-import { type GpuStat, type SystemStats, getSystemStats, wsUrl } from '../api/client'
+import { useCallback, useEffect, useState } from 'react'
+import { type GpuStat, type SystemStats, getSystemStats } from '../api/client'
+import { useReconnectingWebSocket } from '../api/useReconnectingWebSocket'
 import { GpuGauge } from '../components/GpuGauge'
 
 export function HardwarePage() {
   const [gpus, setGpus] = useState<GpuStat[]>([])
   const [system, setSystem] = useState<SystemStats | null>(null)
-  const [connected, setConnected] = useState(false)
 
-  useEffect(() => {
-    const ws = new WebSocket(wsUrl('/api/v1/hardware/gpu-stats-ws'))
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onmessage = (ev) => {
-      const data = JSON.parse(ev.data) as { gpus: GpuStat[] }
-      setGpus(data.gpus)
-    }
-    return () => ws.close()
+  const onMessage = useCallback((data: unknown) => {
+    setGpus((data as { gpus: GpuStat[] }).gpus)
   }, [])
+  const connected = useReconnectingWebSocket('/api/v1/hardware/gpu-stats-ws', onMessage)
 
   useEffect(() => {
     const fetchSystem = () => getSystemStats().then(setSystem).catch(() => {})
