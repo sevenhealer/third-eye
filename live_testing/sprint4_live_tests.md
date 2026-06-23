@@ -149,13 +149,32 @@ asyncio.run(main())
 "
 ```
 
-**Expected:** your enrolled name(s) appear in `occupants` while you're in
-frame, and the list empties within ~60s of leaving (`PERSON_EXITED` +
-TTL).
+**Expected:** your enrolled `person_id` (a UUID) appears in `occupants`
+while you're in frame, and the list empties within ~60s of leaving
+(`PERSON_EXITED` + TTL). This raw store is keyed by `person_id`, not
+name — name resolution happens one layer up, at the NL query (STEP 3)
+and dashboard (STEP 4). Don't expect a human-readable name straight out
+of this call.
 
 **👀 Needs your eyes:** walk in and out of the zone while watching the
 command above re-run — confirm the occupant list updates promptly and
 doesn't lag noticeably behind your actual movement.
+
+**Confirmed (2026-06-23):** with the real camera, `occupants` returned
+`['3ec97f0b-f0ce-4937-8ee2-d7655443f24b']`, verified against `persons`
+to be exactly your enrolled record (`display_name = Rohan`). Doc text
+above corrected — it previously said "name(s) appear," which was wrong;
+this layer stores `person_id`, by design.
+
+Exit timing is also faster than "TTL" implies: `ZonePresenceMonitor`
+(`src/event_detection/zone_presence.py`) fires `PERSON_EXITED` after
+`exit_grace_frames=45` consecutive missed frames (~3s at 15fps, a
+debounce against brief occlusion, not the 60s key TTL), and
+`run_live.py` actively calls `remove_zone_occupant()` right then —
+it does not wait for the key to expire. The 60s TTL only matters if the
+whole pipeline crashes before it can clean up. Live-confirmed: walked
+out, log showed `PERSON_EXITED Rohan [verified] zone=bedroom track=1`,
+and `occupants` was already `[]` well inside the 60s window.
 
 ---
 
