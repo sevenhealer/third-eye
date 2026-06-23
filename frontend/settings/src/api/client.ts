@@ -121,3 +121,12 @@ export function wsUrl(path: string): string {
   const token = getToken() || ''
   return `${proto}://${location.host}${path}?token=${encodeURIComponent(token)}`
 }
+
+// multipart/x-mixed-replace - browsers render this natively in an <img>,
+// no JS polling. Call once per camera_id and never recompute the src from
+// state that changes on a poll tick, or the stream restarts every time
+// (see CameraTile's comment).
+export function mjpegUrl(cameraId: string): string {
+  const token = getToken() || ''
+  return `/api/v1/cameras/${cameraId}/mjpeg?token=${encodeURIComponent(token)}`
+}

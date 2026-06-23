@@ -129,6 +129,13 @@ h1, h2, h3 { font-weight: 600; margin: 0; }
 .status-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
 .dot-online { background: #22c55e; }
 .dot-offline { background: #6b7280; }
+
+.cam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+.cam-tile { background: #161b22; border: 1px solid #2a2f37; border-radius: 8px; overflow: hidden; cursor: pointer; }
+.cam-tile img { width: 100%; display: block; background: #000; aspect-ratio: 16/9; object-fit: contain; }
+.cam-tile .label { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-size: 13px; }
+.live-modal-img { max-width: 85vw; max-height: 80vh; display: block; background: #000; }
+.modal-box:has(.live-modal-img) { width: auto; }
 .dot-error { background: #f87171; }
 
 .modal-overlay {
