@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import json
+import re
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.auth import ActiveUser
+from src.core.audit_log import write_audit_event
 from src.core.database import get_db, get_redis
 
 router = APIRouter()
+
+# Mirrors the DB's zones_zone_type_check constraint — validated here too so
+# a bad value gets a clean 400 instead of a raw asyncpg error.
+VALID_ZONE_TYPES = {"general", "restricted", "entrance", "exit", "monitored"}
+_ZONE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,99}$")
 
 
 class ZoneStatus(BaseModel):
@@ -29,6 +37,19 @@ class PresenceLogEntry(BaseModel):
     entry_time: str
     exit_time: str | None
     is_unknown: bool
+
+
+class CreateZoneRequest(BaseModel):
+    zone_id: str
+    display_name: str
+    zone_type: str = "general"
+    description: str | None = None
+
+
+class UpdateZoneRequest(BaseModel):
+    zone_type: str | None = None
+    display_name: str | None = None
+    description: str | None = None
 
 
 @router.get("", response_model=list[ZoneStatus])
@@ -76,6 +97,98 @@ async def list_zones(
             object_counts=object_counts,
         ))
     return zones
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_zone(
+    body: CreateZoneRequest,
+    current_user: ActiveUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    current_user.require_role("admin")
+
+    if body.zone_type not in VALID_ZONE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"zone_type must be one of {sorted(VALID_ZONE_TYPES)}.",
+        )
+    if not _ZONE_ID_RE.match(body.zone_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="zone_id must be lowercase letters/digits/underscores, "
+                   "starting with a letter (e.g. 'dining_room').",
+        )
+
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO zones (zone_id, display_name, zone_type, description)
+                VALUES (:zone_id, :display_name, :zone_type, :description)
+            """),
+            {
+                "zone_id": body.zone_id,
+                "display_name": body.display_name,
+                "zone_type": body.zone_type,
+                "description": body.description,
+            },
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Zone '{body.zone_id}' already exists.",
+        )
+
+    await write_audit_event(
+        db, "ZONE_CREATED",
+        actor_id=current_user.user_id,
+        actor_username=current_user.username,
+        resource_type="zone",
+        resource_id=body.zone_id,
+        details={"display_name": body.display_name, "zone_type": body.zone_type},
+    )
+    return {"zone_id": body.zone_id, "display_name": body.display_name, "zone_type": body.zone_type}
+
+
+@router.patch("/{zone_id}")
+async def update_zone(
+    zone_id: str,
+    body: UpdateZoneRequest,
+    current_user: ActiveUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    current_user.require_role("admin")
+
+    if body.zone_type is not None and body.zone_type not in VALID_ZONE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"zone_type must be one of {sorted(VALID_ZONE_TYPES)}.",
+        )
+
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update.")
+
+    set_clause = ", ".join(f"{col} = :{col}" for col in updates)
+    result = await db.execute(
+        text(f"UPDATE zones SET {set_clause} WHERE zone_id = :zone_id RETURNING zone_id"),
+        {**updates, "zone_id": zone_id},
+    )
+    if not result.fetchone():
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Zone not found.")
+    await db.commit()
+
+    await write_audit_event(
+        db, "ZONE_UPDATED",
+        actor_id=current_user.user_id,
+        actor_username=current_user.username,
+        resource_type="zone",
+        resource_id=zone_id,
+        details=updates,
+    )
+    return {"zone_id": zone_id, **updates}
 
 
 @router.get("/{zone_id}/presence-log", response_model=list[PresenceLogEntry])

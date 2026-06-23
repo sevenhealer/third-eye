@@ -128,7 +128,10 @@
 
   <section style="margin-top:18px" class="grid">
     <div class="panel">
-      <h2>Zones</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h2 style="margin:0">Zones</h2>
+        <button onclick="openAddZone()" style="padding:5px 10px; background:#16a34a; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">+ Add zone</button>
+      </div>
       <table id="zones-table">
         <thead><tr><th>Zone</th><th>Type</th><th>Occupants</th><th>Object counts</th></tr></thead>
         <tbody></tbody>
@@ -172,6 +175,26 @@
       <thead><tr><th>Who</th><th>Entered</th><th>Exited</th></tr></thead>
       <tbody id="zonelog-body"></tbody>
     </table>
+  </div>
+</div>
+
+<div id="addzone-modal" class="modal-overlay" onclick="if(event.target===this) closeAddZone()">
+  <div class="modal-box" style="width:300px;">
+    <div class="modal-head">
+      <strong>Add zone</strong>
+      <button onclick="closeAddZone()">Close</button>
+    </div>
+    <div id="addzone-error" style="color:#f87171; font-size:12px; min-height:16px;"></div>
+    <input id="addzone-id" placeholder="zone_id (e.g. dining_room)" style="width:100%; box-sizing:border-box; margin-bottom:8px; padding:7px; background:#0e1116; color:#e6e6e6; border:1px solid #2a2f37; border-radius:4px;">
+    <input id="addzone-name" placeholder="Display name (e.g. Dining Room)" style="width:100%; box-sizing:border-box; margin-bottom:8px; padding:7px; background:#0e1116; color:#e6e6e6; border:1px solid #2a2f37; border-radius:4px;">
+    <select id="addzone-type" style="width:100%; box-sizing:border-box; margin-bottom:10px; padding:7px; background:#0e1116; color:#e6e6e6; border:1px solid #2a2f37; border-radius:4px;">
+      <option value="general">general</option>
+      <option value="restricted">restricted</option>
+      <option value="entrance">entrance</option>
+      <option value="exit">exit</option>
+      <option value="monitored">monitored</option>
+    </select>
+    <button onclick="submitAddZone()" style="width:100%; padding:8px; background:#2563eb; color:white; border:none; border-radius:4px; cursor:pointer;">Create</button>
   </div>
 </div>
 
@@ -298,6 +321,8 @@ function closeLiveView() {
   document.getElementById('live-modal-img').src = '';
 }
 
+const ZONE_TYPES = ['general', 'restricted', 'entrance', 'exit', 'monitored'];
+
 async function refreshZones() {
   const res = await fetch('/api/v1/zones', { headers: authHeaders() });
   if (res.status === 401) return logout();
@@ -306,14 +331,77 @@ async function refreshZones() {
   tbody.innerHTML = '';
   for (const z of zones) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${z.display_name}</td>
-      <td><span class="badge ${z.zone_type === 'restricted' ? 'restricted' : ''}">${z.zone_type}</span></td>
+    const typeTd = document.createElement('td');
+    const select = document.createElement('select');
+    select.style.cssText = 'background:#0e1116; color:#e6e6e6; border:1px solid #2a2f37; border-radius:4px; font-size:12px; padding:2px;';
+    select.className = z.zone_type === 'restricted' ? 'badge restricted' : '';
+    for (const t of ZONE_TYPES) {
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t; opt.selected = t === z.zone_type;
+      select.appendChild(opt);
+    }
+    select.onclick = (ev) => ev.stopPropagation();   // don't also open the presence log
+    select.onchange = () => updateZoneType(z.zone_id, select.value);
+    typeTd.appendChild(select);
+
+    tr.innerHTML = `<td>${z.display_name}</td>`;
+    tr.appendChild(typeTd);
+    tr.insertAdjacentHTML('beforeend', `
       <td>${z.occupants.length ? z.occupants.map(o => o.display_name).join(', ') : '—'}</td>
-      <td>${Object.entries(z.object_counts).map(([k,v]) => `${k}:${v}`).join(', ') || '—'}</td>`;
+      <td>${Object.entries(z.object_counts).map(([k,v]) => `${k}:${v}`).join(', ') || '—'}</td>`);
     tr.onclick = () => openZoneLog(z.zone_id, z.display_name);
     tbody.appendChild(tr);
   }
+}
+
+async function updateZoneType(zoneId, newType) {
+  const res = await fetch(`/api/v1/zones/${zoneId}`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ zone_type: newType }),
+  });
+  if (res.status === 401) return logout();
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(`Couldn't update zone type: ${err.detail || res.statusText}`);
+  }
+  refreshZones();
+}
+
+function openAddZone() {
+  document.getElementById('addzone-id').value = '';
+  document.getElementById('addzone-name').value = '';
+  document.getElementById('addzone-type').value = 'general';
+  document.getElementById('addzone-error').textContent = '';
+  document.getElementById('addzone-modal').style.display = 'flex';
+}
+
+function closeAddZone() {
+  document.getElementById('addzone-modal').style.display = 'none';
+}
+
+async function submitAddZone() {
+  const zone_id = document.getElementById('addzone-id').value.trim();
+  const display_name = document.getElementById('addzone-name').value.trim();
+  const zone_type = document.getElementById('addzone-type').value;
+  const errEl = document.getElementById('addzone-error');
+  if (!zone_id || !display_name) {
+    errEl.textContent = 'zone_id and display name are both required.';
+    return;
+  }
+  const res = await fetch('/api/v1/zones', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ zone_id, display_name, zone_type }),
+  });
+  if (res.status === 401) return logout();
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    errEl.textContent = err.detail || 'Failed to create zone.';
+    return;
+  }
+  closeAddZone();
+  refreshZones();
 }
 
 async function openZoneLog(zoneId, displayName) {
