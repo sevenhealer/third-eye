@@ -4,7 +4,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-from src.core.database import get_redis
+from src.core.database import get_redis, get_redis_binary
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -94,6 +94,16 @@ class ShortTermMemory:
     async def set_camera_status(self, camera_id: str, status: str) -> None:
         redis = await get_redis()
         await redis.setex(f"camera:{camera_id}:status", TTL_CAMERA_STATUS, status)
+
+    async def publish_frame(self, camera_id: str, jpeg_bytes: bytes) -> None:
+        """Fan out one encoded frame to camera:{camera_id}:frames. A PUBLISH
+        with zero subscribers is a cheap no-op, so this is safe to call even
+        when nobody has the live view open — see cameras.py's mjpeg route.
+        Uses the binary client: JPEG bytes aren't valid UTF-8, and the
+        default client's decode_responses=True would crash reading them
+        back (confirmed live — hiredis raised UnicodeDecodeError)."""
+        redis = await get_redis_binary()
+        await redis.publish(f"camera:{camera_id}:frames", jpeg_bytes)
 
     async def register_name_lookup(self, name: str, person_id: UUID | str) -> None:
         redis = await get_redis()

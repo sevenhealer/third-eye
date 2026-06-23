@@ -76,6 +76,7 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 # ── Redis ─────────────────────────────────────────────────────────────────────
 
 _redis_client: aioredis.Redis | None = None
+_redis_binary_client: aioredis.Redis | None = None
 
 
 async def get_redis() -> aioredis.Redis:
@@ -89,6 +90,26 @@ async def get_redis() -> aioredis.Redis:
             health_check_interval=30,
         )
     return _redis_client
+
+
+async def get_redis_binary() -> aioredis.Redis:
+    """Separate client with decode_responses=False, for payloads that
+    aren't valid UTF-8 (e.g. JPEG frame pub/sub — see
+    ShortTermMemory.publish_frame and cameras.py's /mjpeg route). The
+    default client above decodes every response as text, which crashes
+    on binary data; everything else in the codebase is string-keyed, so
+    that client is left alone rather than flipping decode_responses
+    globally."""
+    global _redis_binary_client
+    if _redis_binary_client is None:
+        settings = get_settings()
+        _redis_binary_client = aioredis.from_url(
+            settings.redis_url,
+            password=settings.redis_password or None,
+            decode_responses=False,
+            health_check_interval=30,
+        )
+    return _redis_binary_client
 
 
 # ── Neo4j ──────────────────────────────────────────────────────────────────────

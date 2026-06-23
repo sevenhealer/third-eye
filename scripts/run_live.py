@@ -833,21 +833,28 @@ async def main() -> None:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 producer.stop()
 
-        # dashboard snapshot: downscaled annotated JPEG, written every ~10
-        # frames (not every frame — disk I/O, and the dashboard only polls
-        # at ~1fps anyway). Atomic write (tmp + rename) so /stream never
-        # serves a half-written file.
-        if stm is not None and frame_count % 10 == 0:
+        # Live view (dashboard click-to-expand modal): publish a downscaled
+        # JPEG every 2nd frame over Redis pub/sub for the MJPEG endpoint
+        # (src/api/routers/cameras.py) to relay — a PUBLISH with nobody
+        # subscribed is essentially free, so this runs unconditionally.
+        # Camera-tile snapshot (the small thumbnails, polled every 2s by
+        # the dashboard) reuses the same encode but only needs writing to
+        # disk every ~10 frames. Atomic write (tmp + rename) so /stream
+        # never serves a half-written file.
+        if stm is not None and frame_count % 2 == 0:
             h, w = frame.shape[:2]
             scale = min(960 / w, 1.0)
             snap = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
             ok_enc, buf = cv2.imencode(".jpg", snap, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if ok_enc:
-                snap_dir = ROOT / "data" / "snapshots" / args.camera_id
-                snap_dir.mkdir(parents=True, exist_ok=True)
-                tmp_path = snap_dir / "latest.jpg.tmp"
-                tmp_path.write_bytes(buf.tobytes())
-                tmp_path.replace(snap_dir / "latest.jpg")
+                jpeg_bytes = buf.tobytes()
+                await stm.publish_frame(args.camera_id, jpeg_bytes)
+                if frame_count % 10 == 0:
+                    snap_dir = ROOT / "data" / "snapshots" / args.camera_id
+                    snap_dir.mkdir(parents=True, exist_ok=True)
+                    tmp_path = snap_dir / "latest.jpg.tmp"
+                    tmp_path.write_bytes(jpeg_bytes)
+                    tmp_path.replace(snap_dir / "latest.jpg")
 
     try:
         await producer.run(process_frame)

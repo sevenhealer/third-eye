@@ -280,25 +280,22 @@ async function refreshCameras() {
   }
 }
 
-let liveViewInterval = null;
-
 function openLiveView(cameraId, displayName) {
   document.getElementById('live-modal-title').textContent = displayName || cameraId;
   document.getElementById('live-modal').style.display = 'flex';
   const img = document.getElementById('live-modal-img');
-  img.src = '';
-  const tick = () => swapImageNoFlicker(img, `/stream/${cameraId}/latest.jpg?t=${Date.now()}`);
-  tick();
-  // run_live.py only writes a new snapshot every ~10 frames (~0.67s @15fps),
-  // so polling faster than that gains nothing — 600ms keeps it feeling live
-  // without hammering the endpoint for unchanged bytes.
-  liveViewInterval = setInterval(tick, 600);
+  // multipart/x-mixed-replace: the browser keeps the connection open and
+  // repaints this <img> itself as each new frame arrives — no JS polling,
+  // no flicker-avoidance needed, latency is just however fast run_live.py
+  // publishes (see cameras.py's /mjpeg route + ShortTermMemory.publish_frame).
+  img.src = `/api/v1/cameras/${cameraId}/mjpeg?token=${encodeURIComponent(token)}`;
 }
 
 function closeLiveView() {
   document.getElementById('live-modal').style.display = 'none';
-  if (liveViewInterval) clearInterval(liveViewInterval);
-  liveViewInterval = null;
+  // Clearing src aborts the underlying HTTP request, which lets the
+  // server's pubsub.listen() loop unsubscribe instead of streaming forever.
+  document.getElementById('live-modal-img').src = '';
 }
 
 async function refreshZones() {
