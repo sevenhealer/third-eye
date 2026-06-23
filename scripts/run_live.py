@@ -483,6 +483,21 @@ async def main() -> None:
         if stm is not None and frame_count % 150 == 0:
             await stm.set_camera_status(args.camera_id, "online")
 
+        # person_names is a startup-time snapshot; without this, a person
+        # approved via the dashboard while this process keeps running would
+        # show up as a raw person_id[:8] (see resolve_label) until restart —
+        # same ~10s cadence as the camera-status heartbeat above.
+        if gallery is not None and frame_count % 150 == 0:
+            try:
+                async with get_db_session() as session:
+                    rows = (await session.execute(sql_text(
+                        "SELECT person_id, display_name FROM persons WHERE is_active = true"
+                    ))).fetchall()
+                person_names.clear()
+                person_names.update({str(r[0]): str(r[1]) for r in rows})
+            except Exception as exc:
+                print(f"  ! person_names refresh failed (keeping stale names): {exc}")
+
         now = time.monotonic()
         # tell camera stalls apart from slow inference: if the gap dwarfs the
         # last inference time, the source delivered nothing during it
