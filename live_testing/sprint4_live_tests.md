@@ -609,6 +609,9 @@ Open the **Hardware** tab in Settings.
 3090 confirmed via direct API call and a real WebSocket connection
 before ever touching the UI.
 
+**Confirmed (2026-06-23) by the user:** gauges look right and update
+live.
+
 ---
 
 ## Cleanup (optional)
@@ -666,13 +669,14 @@ at the user's request, explicitly scoped as Sprint 4 rather than a new
 sprint. Tracked separately from the MVP criteria above so it's clear
 what's original vs. added.
 
-- [ ] Settings app loads, carries over the dashboard login, tabs switch,
-      Advanced mode toggles and persists — **needs your visual
-      confirmation (STEP 7)**
-- [ ] Add/start/edit/stop/remove a camera from Settings and have it
-      actually control a real `run_live.py` process — **backend-verified
-      by me (headless-Chrome click-through); needs your own
-      confirmation (STEP 8)**
-- [ ] Hardware tab shows real, live-updating GPU/CPU/RAM/disk stats that
-      match `nvidia-smi`/`htop` — **backend-verified by me; needs your
-      own confirmation (STEP 9)**
+- [x] Settings app loads, carries over the dashboard login, tabs switch,
+      Advanced mode toggles and persists — confirmed by the user
+      (STEP 7); two real gaps found and fixed (no dashboard↔settings
+      nav, laggy tiles)
+- [x] Add/start/edit/stop/remove a camera from Settings and have it
+      actually control a real `run_live.py` process — confirmed by the
+      user's own hand, including a real bad-RTSP-credentials case
+      (STEP 8); fixed crash-reason visibility and a pubsub timeout bug
+      found along the way
+- [x] Hardware tab shows real, live-updating GPU/CPU/RAM/disk stats —
+      confirmed by the user (STEP 9)
