@@ -368,6 +368,23 @@ non-human object the closed-set detector still boxes as a face-like
 region; the identity layer correctly keeps it `unknown`, and true
 non-human rejection is anti-spoofing's job in Sprint 5. Not a new bug.
 
+**Image quality follow-up (2026-06-23):** during the 2026-06-22 run
+above, the user reported the live image quality as "very bad." I have
+no visual access, so I checked the stream objectively instead of
+guessing: `ffprobe` on `stream1` (the profile we use) showed
+2304x1296@15fps at only **~1.4-1.7 Mbps** — low for that resolution —
+plus repeated "Non-monotonous DTS" warnings (timestamp jitter from the
+camera itself). `stream2` is not a fix (it's 1280x720, lower-res, not
+higher-quality). Re-checked visually with the user on a fresh
+single-stream `--show` run today: looked fine this time. Likely
+explanation, not yet confirmed: the bitrate/quality problem may be
+**load- or motion-dependent** (worse under the two-concurrent-process
+condition in the original test, or during higher-motion moments) rather
+than constantly bad. Not re-tested under concurrent 2-camera load
+specifically for quality (only for smoothness/VRAM, which passed). If
+quality complaints recur, check `nvidia-smi` GPU decode load and
+RTSP packet loss during the bad period, not just the encoder bitrate.
+
 ---
 
 ## Cleanup (optional)
