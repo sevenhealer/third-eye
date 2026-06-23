@@ -1,5 +1,5 @@
 .PHONY: help up down logs shell test lint format check-env setup install install-gpu \
-        infra reset serve stop frontend-build fresh run certs
+        infra reset serve stop frontend-build fresh run certs bootstrap
 
 COMPOSE = docker compose
 APP_SERVICE = api
@@ -15,10 +15,9 @@ help:
 	@echo "Third-Eye Visual Intelligence Platform"
 	@echo ""
 	@echo "  ── one-command dev (app runs natively, infra in Docker) ──"
-	@echo "  make install      Install deps into .venv (Mac / CPU dev)"
-	@echo "  make install-gpu  Install deps into .venv (Linux + NVIDIA GPU)"
-	@echo "  make run          Run EVERYTHING (infra + UI build + API), keeps data"
-	@echo "  make fresh        CLEAN SLATE: stop, wipe all data, rebuild UI, run"
+	@echo "  make run          FRESH CLONE → fully set up → running (one command)"
+	@echo "  make fresh        CLEAN SLATE: set up, stop, wipe all data, then run"
+	@echo "  make bootstrap    One-time setup only (venv, .env, deps, models, DB, UI)"
 	@echo "  make serve        Run only the API server (foreground; Ctrl+C stops it)"
 	@echo "  make reset        DESTRUCTIVE: wipe all data, reseed admin/admin + zones"
 	@echo "  make stop         Stop the native API server + camera workers"
@@ -58,6 +57,32 @@ install-gpu:
 		--index-url https://download.pytorch.org/whl/cu128
 	.venv/bin/pip install -e ".[dev]"
 
+# Pick the dependency install path automatically from whether an NVIDIA GPU
+# is present on this host.
+HAS_GPU := $(shell command -v nvidia-smi >/dev/null 2>&1 && echo 1 || echo 0)
+
+# ── First-run bootstrap: fresh clone → fully set up ───────────────────────────
+# Idempotent — every step skips if already done, so it's safe to re-run and is
+# what `make run`/`make fresh` call. Needs Docker, Node/npm, Python 3 and
+# openssl already installed (it checks and tells you if one is missing).
+bootstrap:
+	@command -v docker  >/dev/null 2>&1 || { echo "ERROR: Docker not found — install Docker, then re-run."; exit 1; }
+	@command -v node    >/dev/null 2>&1 || { echo "ERROR: Node/npm not found — install Node 18+, then re-run."; exit 1; }
+	@command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found."; exit 1; }
+	@test -d .venv || { echo "→ creating .venv"; python3 -m venv .venv; }
+	@test -f .env  || { echo "→ generating .env (random secrets)"; python3 scripts/setup_env.py; }
+	@.venv/bin/python -c "import fastapi, insightface, torch" 2>/dev/null \
+		|| { echo "→ installing Python deps ($(if $(filter 1,$(HAS_GPU)),GPU,CPU))"; \
+		     $(MAKE) $(if $(filter 1,$(HAS_GPU)),install-gpu,install); }
+	@test -d models/weights/models/buffalo_l \
+		|| { echo "→ downloading face models (~200 MB)"; .venv/bin/python scripts/download_models.py; }
+	$(COMPOSE) up -d $(INFRA_SERVICES)
+	@bash scripts/wait_for_pg.sh
+	@echo "→ applying DB migrations"
+	@.venv/bin/python -m alembic upgrade head
+	@$(MAKE) frontend-build
+	@echo "✓ bootstrap complete — login admin / admin"
+
 # ── Native dev workflow ───────────────────────────────────────────────────────
 infra: check-env
 	$(COMPOSE) up -d $(INFRA_SERVICES)
@@ -66,13 +91,13 @@ infra: check-env
 frontend-build:
 	cd frontend/settings && npm install && npm run build
 
-# Run the whole system (infra + frontend bundle + API), keeping existing
-# data. This is the everyday "bring it all up" command. Use `make fresh`
-# instead when you want a wiped clean slate first. If port 8000 is already
-# in use, `make stop` first.
-run: infra frontend-build
+# The one command: fresh clone → fully set up → running. bootstrap is
+# idempotent, so after the first (heavy) run this is just "bring it all up".
+# Use `make fresh` instead when you want a wiped clean slate first. If port
+# 8000 is already in use, `make stop` first.
+run: bootstrap
 	@echo ""
-	@echo "  Backend + frontend coming up.  Dashboard: http://localhost:8000/settings/"
+	@echo "  Backend + frontend up.  Dashboard: http://localhost:8000/settings/  (admin/admin)"
 	@$(MAKE) serve
 
 reset: infra
@@ -100,9 +125,9 @@ serve: check-env
 			--timeout-graceful-shutdown $(GRACEFUL_SHUTDOWN_S); \
 	fi
 
-# One command for a clean test slate: stop anything running, wipe every data
-# store, rebuild the UI bundle, then run the server in the foreground.
-fresh: stop infra reset frontend-build
+# One command for a clean test slate: ensure everything's set up (bootstrap is
+# idempotent), stop anything running, wipe every data store, then run.
+fresh: bootstrap stop reset
 	@echo ""
 	@echo "──────────────────────────────────────────────"
 	@echo "  Clean slate ready.  Login:  admin / admin"
