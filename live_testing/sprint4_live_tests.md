@@ -109,8 +109,10 @@ live). At least one identity enrolled. Infra containers healthy
   restart) killed the old process before it could fire `PERSON_EXITED`
   for whoever it was tracking, leaving that `zone_presence` row open
   forever. Graceful shutdown now explicitly closes any still-open rows.
-  Rows created *before* this fix are still stuck open (historical, not
-  retroactively patched — ask if you want them cleaned up).
+  The 42 rows that had piled up from before this fix (and from cases
+  outside it — restarts that died before logging anything at all, with
+  no recoverable exit time) were deleted on 2026-06-23 since there was
+  no real exit time to backfill; deletion, not fabrication.
 - **Someone/something shows as "Unknown" in a zone log but never shows
   up in Pending Enrollments** → was a real bug, fixed (2026-06-23):
   a borderline-similarity track (gallery match hovering at the accept
@@ -126,6 +128,32 @@ live). At least one identity enrolled. Infra containers healthy
   at all was never affected by this bug — if a clean, well-lit,
   several-second sighting of a true unknown still doesn't produce a
   candidate, that's a new, different bug — report it.
+- **You get logged out of /settings every 15 minutes or so, with no
+  obvious cause** → was a real bug, fixed (2026-06-23): the access
+  token has always expired after 15 minutes, and the `refresh_token`
+  returned at login was minted but never stored or used by either
+  frontend. `apiFetch`'s 401 handler bounced straight to `/login` on
+  every expiry, even mid-session. Added `POST /api/v1/auth/refresh`
+  and wired the frontend to retry once through it before giving up —
+  a healthy session should now silently stay logged in indefinitely.
+  If you get bounced to login unexpectedly again, check the browser's
+  sessionStorage actually has a `te_refresh` key (a *pre-fix* login,
+  from before this commit, won't have it — log out and back in once).
+- **Restarting the API server (`uvicorn`) hangs forever on "Waiting
+  for background tasks to complete," and the camera process never
+  gets signaled** → found live this session, not yet fixed: with an
+  open WebSocket connection (alerts/gpu-stats) at the moment of
+  shutdown, uvicorn's own pre-lifespan "wait for connections to
+  close" phase can stall indefinitely *before* it ever reaches our
+  `lifespan` shutdown function — confirmed by `third_eye_shutting_down`
+  never appearing in the log at all. The camera child process is
+  completely unaffected (never signaled), so this is safe to leave
+  running. If you hit this: `kill -KILL` the **uvicorn PID specifically**
+  (check via `ss -tlnp | grep 8000`), NOT the camera PID — the
+  supervisor's "already running externally" guard will recognize the
+  still-running camera on the next startup and won't double-spawn it.
+  Root cause (likely needs `--timeout-graceful-shutdown` or an
+  explicit close on the WS handlers) is a follow-up, not yet fixed.
 
 ### 🟡 DEFERRED — accept for now (NOT failures; later sprints)
 
