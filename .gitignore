@@ -66,9 +66,11 @@ logs/
 # Archives (video segments)
 /tmp/third-eye-archive/
 
-# IDE
+# IDE / AI tooling — local-only, was previously relying on a per-clone-only
+# .git/info/exclude entry that doesn't travel with the repo
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 
@@ -78,6 +80,8 @@ Thumbs.db
 
 # Test artifacts
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 *.xml
