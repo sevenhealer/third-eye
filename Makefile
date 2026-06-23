@@ -1,5 +1,5 @@
 .PHONY: help up down logs shell test lint format check-env setup install install-gpu \
-        infra reset serve stop frontend-build fresh run
+        infra reset serve stop frontend-build fresh run certs
 
 COMPOSE = docker compose
 APP_SERVICE = api
@@ -23,6 +23,8 @@ help:
 	@echo "  make reset        DESTRUCTIVE: wipe all data, reseed admin/admin + zones"
 	@echo "  make stop         Stop the native API server + camera workers"
 	@echo "  make infra        Start just the infra containers"
+	@echo "  make certs        Generate a self-signed cert so serve uses HTTPS"
+	@echo "                    (needed for the webcam Enroll page over the LAN)"
 	@echo ""
 	@echo "  ── full containerized stack / ops ──"
 	@echo "  make setup        Generate/top-up .env with strong random secrets"
@@ -80,10 +82,23 @@ reset: infra
 stop:
 	@bash scripts/stop_native.sh
 
+certs:
+	@bash scripts/gen_certs.sh
+
+# Serve HTTPS when a cert exists (so the webcam Enroll page works on the LAN),
+# otherwise plain HTTP. Either way, bound graceful shutdown.
 serve: check-env
-	@echo "API on http://localhost:8000  (dashboard: /settings/ , login admin/admin)"
-	.venv/bin/python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 \
-		--timeout-graceful-shutdown $(GRACEFUL_SHUTDOWN_S)
+	@if [ -f infrastructure/certs/server.crt ]; then \
+		echo "API on https://localhost:8000  (dashboard: /settings/ , login admin/admin)"; \
+		.venv/bin/python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 \
+			--ssl-keyfile infrastructure/certs/server.key \
+			--ssl-certfile infrastructure/certs/server.crt \
+			--timeout-graceful-shutdown $(GRACEFUL_SHUTDOWN_S); \
+	else \
+		echo "API on http://localhost:8000  (HTTP — run 'make certs' for HTTPS / webcam enroll)"; \
+		.venv/bin/python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 \
+			--timeout-graceful-shutdown $(GRACEFUL_SHUTDOWN_S); \
+	fi
 
 # One command for a clean test slate: stop anything running, wipe every data
 # store, rebuild the UI bundle, then run the server in the foreground.
