@@ -245,16 +245,6 @@ function enterDashboard() {
   setInterval(refreshCandidates, 4000);
 }
 
-// Preloads a new image off-DOM and only swaps the visible <img>'s src once
-// it has actually finished loading, so the old frame stays on screen the
-// whole time instead of flashing blank/black every poll tick.
-function swapImageNoFlicker(imgEl, newSrc) {
-  const probe = new Image();
-  probe.onload = () => { imgEl.src = newSrc; imgEl.style.opacity = 1; };
-  probe.onerror = () => { imgEl.style.opacity = 0.3; };
-  probe.src = newSrc;
-}
-
 const cameraTiles = {};   // camera_id -> live DOM refs, built once and updated in place
 
 async function refreshCameras() {
@@ -291,11 +281,16 @@ async function refreshCameras() {
         name: div.querySelector('.cam-name'),
         zone: div.querySelector('.cam-zone'),
       };
+      // MJPEG, same as the click-to-expand modal: the browser repaints
+      // this <img> itself as frames arrive over the open connection, so
+      // it's set once here, not re-fetched on every 2s metadata poll like
+      // the old /stream/.../latest.jpg snapshot was (that was the actual
+      // source of the lag the user reported on the small tiles too).
+      t.img.src = `/api/v1/cameras/${c.camera_id}/mjpeg?token=${encodeURIComponent(token)}`;
     }
     t.dot.className = `status-dot status-${c.status}`;
     t.name.textContent = c.display_name;
     t.zone.textContent = c.zone_id || '';
-    swapImageNoFlicker(t.img, `/stream/${c.camera_id}/latest.jpg?t=${Date.now()}`);
   }
 
   for (const camId of Object.keys(cameraTiles)) {

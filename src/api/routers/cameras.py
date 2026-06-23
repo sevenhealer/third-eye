@@ -440,8 +440,12 @@ async def camera_status_ws(websocket: WebSocket, camera_id: str) -> None:
                 "state": row.state, "pid": row.pid,
                 "last_error": row.last_error, "restart_count": row.restart_count,
             })
-        async for message in pubsub.listen():
-            if message["type"] != "message":
+        while True:
+            # get_message(timeout=...), not listen() - see the mjpeg
+            # route's comment; a camera that's been stable for a while
+            # (no status changes) shouldn't kill this connection.
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=20.0)
+            if message is None:
                 continue
             await websocket.send_text(
                 message["data"] if isinstance(message["data"], str) else message["data"].decode()
@@ -499,8 +503,18 @@ async def stream_camera_mjpeg(camera_id: str, token: str = Query(...)) -> Stream
         channel = f"camera:{camera_id}:frames"
         await pubsub.subscribe(channel)
         try:
-            async for message in pubsub.listen():
-                if message["type"] != "message":
+            while True:
+                # get_message(timeout=...) rather than `async for ... in
+                # pubsub.listen()`: listen() blocks indefinitely on the
+                # connection's read, which raised redis.exceptions.TimeoutError
+                # (interacting with health_check_interval) and silently killed
+                # the whole stream whenever frames were more than a few
+                # seconds apart (confirmed live - a sparser-FPS camera
+                # disconnected within ~10s). get_message has its own
+                # bounded wait and just returns None on no-message, so a
+                # quiet camera no longer kills the connection.
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=20.0)
+                if message is None:
                     continue
                 frame_bytes = message["data"]
                 yield (

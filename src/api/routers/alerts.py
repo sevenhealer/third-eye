@@ -170,8 +170,17 @@ async def alerts_ws(websocket: WebSocket) -> None:
     pubsub = redis.pubsub()
     await pubsub.subscribe(ALERT_CHANNEL)
     try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
+        while True:
+            # get_message(timeout=...), not `async for ... in pubsub.listen()`:
+            # listen() blocks indefinitely on the connection's read, which
+            # raises redis.exceptions.TimeoutError (interacts with
+            # health_check_interval) and silently kills the connection
+            # whenever nothing is published for a while - alerts are rare
+            # by nature, so this was likely the most exposed spot in the
+            # app for that bug. get_message just returns None on no-message
+            # within its own bounded wait, so a quiet period doesn't kill it.
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=20.0)
+            if message is None:
                 continue
             data = message["data"]
             await websocket.send_text(
