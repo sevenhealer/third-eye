@@ -74,9 +74,16 @@ export interface ZoneStatus {
   zone_id: string
   display_name: string
   zone_type: string
+  description: string | null
   occupant_count: number
   occupants: ZoneOccupant[]
   object_counts: Record<string, number>
+}
+
+export interface ZoneUpdate {
+  display_name?: string
+  zone_type?: string
+  description?: string
 }
 
 export interface PresenceLogEntry {
@@ -199,10 +206,12 @@ export const getCameraLog = (id: string) =>
   apiFetch<{ lines: string[]; message?: string }>(`/api/v1/cameras/${id}/log?lines=80`)
 
 export const listZones = () => apiFetch<ZoneStatus[]>('/api/v1/zones')
-export const createZone = (body: { zone_id: string; display_name: string; zone_type: string }) =>
+export const createZone = (body: { zone_id: string; display_name: string; zone_type: string; description?: string }) =>
   apiFetch('/api/v1/zones', { method: 'POST', body: JSON.stringify(body) })
-export const updateZoneType = (zoneId: string, zone_type: string) =>
-  apiFetch(`/api/v1/zones/${zoneId}`, { method: 'PATCH', body: JSON.stringify({ zone_type }) })
+export const updateZone = (zoneId: string, body: ZoneUpdate) =>
+  apiFetch(`/api/v1/zones/${zoneId}`, { method: 'PATCH', body: JSON.stringify(body) })
+export const deleteZone = (zoneId: string) =>
+  apiFetch(`/api/v1/zones/${zoneId}`, { method: 'DELETE' })
 export const getPresenceLog = (zoneId: string) =>
   apiFetch<PresenceLogEntry[]>(`/api/v1/zones/${zoneId}/presence-log`)
 

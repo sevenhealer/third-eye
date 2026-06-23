@@ -5,7 +5,8 @@ import {
   ZONE_TYPES,
   listZones,
   createZone,
-  updateZoneType,
+  updateZone,
+  deleteZone,
   getPresenceLog,
 } from '../api/client'
 import { usePolling } from '../api/usePolling'
@@ -13,10 +14,11 @@ import { Modal } from '../components/Modal'
 import { useFeedback } from '../components/feedbackContext'
 
 export function ZonesPage() {
-  const { toast } = useFeedback()
+  const { toast, confirm } = useFeedback()
   const [zones, setZones] = useState<ZoneStatus[]>([])
   const [error, setError] = useState('')
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<ZoneStatus | undefined>(undefined)
   const [viewingLog, setViewingLog] = useState<ZoneStatus | undefined>(undefined)
   const [logEntries, setLogEntries] = useState<PresenceLogEntry[]>([])
   const [logMessage, setLogMessage] = useState('')
@@ -31,16 +33,6 @@ export function ZonesPage() {
 
   usePolling(refresh, 3000)
 
-  async function handleTypeChange(zoneId: string, newType: string) {
-    try {
-      await updateZoneType(zoneId, newType)
-      await refresh()
-      toast('Zone type updated.', 'success')
-    } catch (e) {
-      toast(`Couldn't update zone type: ${e instanceof Error ? e.message : 'unknown error'}`, 'error')
-    }
-  }
-
   async function openLog(zone: ZoneStatus) {
     setViewingLog(zone)
     setLogEntries([])
@@ -51,6 +43,24 @@ export function ZonesPage() {
       setLogMessage(entries.length ? '' : 'No recorded visits yet.')
     } catch (e) {
       setLogMessage(e instanceof Error ? e.message : 'Failed to load log.')
+    }
+  }
+
+  async function handleDelete(zone: ZoneStatus) {
+    const ok = await confirm({
+      title: 'Remove zone',
+      message: `Remove "${zone.display_name}"? This only deletes the zone definition — `
+        + `it's blocked if any camera is still assigned to it or it has recorded history.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await deleteZone(zone.zone_id)
+      await refresh()
+      toast(`Zone "${zone.display_name}" removed.`, 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to remove zone.', 'error')
     }
   }
 
@@ -71,25 +81,20 @@ export function ZonesPage() {
             <th>Type</th>
             <th>Occupants</th>
             <th>Object counts</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {zones.map((z) => (
-            <tr key={z.zone_id} className="clickable" onClick={() => openLog(z)}>
-              <td>{z.display_name}</td>
+            <tr key={z.zone_id}>
               <td>
-                <select
-                  className="zone-type-select"
-                  value={z.zone_type}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => handleTypeChange(z.zone_id, e.target.value)}
-                >
-                  {ZONE_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
+                <div>{z.display_name}</div>
+                <div className="cell-sub">{z.zone_id}</div>
+              </td>
+              <td>
+                <span className={`badge${z.zone_type === 'restricted' ? ' restricted' : ''}`}>
+                  {z.zone_type}
+                </span>
               </td>
               <td>{z.occupants.length ? z.occupants.map((o) => o.display_name).join(', ') : '—'}</td>
               <td>
@@ -97,11 +102,18 @@ export function ZonesPage() {
                   .map(([k, v]) => `${k}:${v}`)
                   .join(', ') || '—'}
               </td>
+              <td className="row-actions">
+                <button onClick={() => setEditing(z)}>Edit</button>
+                <button onClick={() => openLog(z)}>Log</button>
+                <button className="btn-danger" onClick={() => handleDelete(z)}>
+                  Remove
+                </button>
+              </td>
             </tr>
           ))}
           {!zones.length && (
             <tr>
-              <td colSpan={4} className="empty">
+              <td colSpan={5} className="empty">
                 No zones yet.
               </td>
             </tr>
@@ -110,11 +122,24 @@ export function ZonesPage() {
       </table>
 
       {adding && (
-        <AddZoneModal
+        <ZoneForm
           onClose={() => setAdding(false)}
-          onCreated={async () => {
+          onSaved={async () => {
             setAdding(false)
             await refresh()
+            toast('Zone created.', 'success')
+          }}
+        />
+      )}
+
+      {editing && (
+        <ZoneForm
+          existing={editing}
+          onClose={() => setEditing(undefined)}
+          onSaved={async () => {
+            setEditing(undefined)
+            await refresh()
+            toast('Zone updated.', 'success')
           }}
         />
       )}
@@ -149,32 +174,70 @@ export function ZonesPage() {
   )
 }
 
-function AddZoneModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [zoneId, setZoneId] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [zoneType, setZoneType] = useState<string>('general')
+function ZoneForm({
+  existing,
+  onClose,
+  onSaved,
+}: {
+  existing?: ZoneStatus
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [zoneId, setZoneId] = useState(existing?.zone_id ?? '')
+  const [displayName, setDisplayName] = useState(existing?.display_name ?? '')
+  const [zoneType, setZoneType] = useState<string>(existing?.zone_type ?? 'general')
+  const [description, setDescription] = useState(existing?.description ?? '')
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   async function submit() {
-    if (!zoneId.trim() || !displayName.trim()) {
-      setError('zone_id and display name are both required.')
+    if (!existing && !zoneId.trim()) {
+      setError('Zone ID is required.')
       return
     }
+    if (!displayName.trim()) {
+      setError('Display name is required.')
+      return
+    }
+    setSubmitting(true)
+    setError('')
     try {
-      await createZone({ zone_id: zoneId.trim(), display_name: displayName.trim(), zone_type: zoneType })
-      onCreated()
+      if (existing) {
+        await updateZone(existing.zone_id, {
+          display_name: displayName.trim(),
+          zone_type: zoneType,
+          description: description.trim() || undefined,
+        })
+      } else {
+        await createZone({
+          zone_id: zoneId.trim(),
+          display_name: displayName.trim(),
+          zone_type: zoneType,
+          description: description.trim() || undefined,
+        })
+      }
+      onSaved()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create zone.')
+      setError(e instanceof Error ? e.message : 'Failed to save zone.')
+    } finally {
+      setSubmitting(false)
     }
   }
 
   return (
-    <Modal title="Add zone" className="camera-form" width={300} onClose={onClose}>
+    <Modal
+      title={existing ? `Edit ${existing.display_name}` : 'Add zone'}
+      className="camera-form"
+      width={320}
+      onClose={onClose}
+    >
       {error && <div className="form-error">{error}</div>}
-      <label>
-        Zone ID
-        <input value={zoneId} placeholder="dining_room" onChange={(e) => setZoneId(e.target.value)} />
-      </label>
+      {!existing && (
+        <label>
+          Zone ID
+          <input value={zoneId} placeholder="dining_room" onChange={(e) => setZoneId(e.target.value)} />
+        </label>
+      )}
       <label>
         Display name
         <input value={displayName} placeholder="Dining Room" onChange={(e) => setDisplayName(e.target.value)} />
@@ -189,8 +252,16 @@ function AddZoneModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
           ))}
         </select>
       </label>
-      <button className="btn-primary" onClick={submit}>
-        Create zone
+      <label>
+        Description <span className="hint">(optional)</span>
+        <input
+          value={description}
+          placeholder="e.g. main floor dining area"
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </label>
+      <button className="btn-primary" disabled={submitting} onClick={submit}>
+        {submitting ? 'Saving…' : existing ? 'Save changes' : 'Create zone'}
       </button>
     </Modal>
   )

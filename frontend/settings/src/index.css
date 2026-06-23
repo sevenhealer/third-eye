@@ -199,6 +199,7 @@ h1, h2, h3 { font-weight: 650; margin: 0; letter-spacing: -0.01em; }
 .data-table tbody tr { transition: background 0.12s; }
 .data-table tr.clickable { cursor: pointer; }
 .data-table tbody tr:hover { background: var(--surface-2); }
+.cell-sub { color: var(--text-faint); font-size: 11px; font-family: var(--mono); margin-top: 2px; }
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .row-actions button {
   padding: 5px 11px; font-size: 12px; background: var(--surface-2); color: var(--text);

@@ -25,6 +25,7 @@ class ZoneStatus(BaseModel):
     zone_id: str
     display_name: str
     zone_type: str
+    description: str | None
     occupant_count: int
     occupants: list[dict]
     object_counts: dict[str, int]
@@ -58,7 +59,7 @@ async def list_zones(
     db: AsyncSession = Depends(get_db),
 ) -> list[ZoneStatus]:
     rows = (await db.execute(
-        text("SELECT zone_id, display_name, zone_type FROM zones")
+        text("SELECT zone_id, display_name, zone_type, description FROM zones")
     )).fetchall()
     redis = await get_redis()
 
@@ -92,6 +93,7 @@ async def list_zones(
             zone_id=row.zone_id,
             display_name=row.display_name,
             zone_type=row.zone_type,
+            description=row.description,
             occupant_count=int(count),
             occupants=occupants,
             object_counts=object_counts,
@@ -189,6 +191,62 @@ async def update_zone(
         details=updates,
     )
     return {"zone_id": zone_id, **updates}
+
+
+@router.delete("/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_zone(
+    zone_id: str,
+    current_user: ActiveUser,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Remove a zone. Refuses while it's still in use: a zone with cameras
+    assigned (cameras.zone_id has no DB-level FK, so deleting would silently
+    orphan them) or with recorded presence/tracked history (those FKs are
+    NO ACTION, so the delete would fail anyway) — block both with a clear
+    409 rather than orphan data or surface a raw integrity error."""
+    current_user.require_role("admin")
+
+    exists = (await db.execute(
+        text("SELECT 1 FROM zones WHERE zone_id = :z"), {"z": zone_id},
+    )).fetchone()
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Zone not found.")
+
+    cam_count = (await db.execute(
+        text("SELECT count(*) AS n FROM cameras WHERE zone_id = :z"), {"z": zone_id},
+    )).scalar_one()
+    if cam_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{cam_count} camera(s) are still assigned to this zone. "
+                   "Reassign or remove them before deleting the zone.",
+        )
+
+    history = (await db.execute(
+        text("""
+            SELECT (SELECT count(*) FROM zone_presence WHERE zone_id = :z)
+                 + (SELECT count(*) FROM tracked_objects WHERE zone_id = :z) AS n
+        """),
+        {"z": zone_id},
+    )).scalar_one()
+    if history:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This zone has {history} recorded event(s) in its history "
+                   "and can't be deleted (the record would be orphaned). It can "
+                   "be left in place, or its type changed, without affecting cameras.",
+        )
+
+    await db.execute(text("DELETE FROM zones WHERE zone_id = :z"), {"z": zone_id})
+    await db.commit()
+
+    await write_audit_event(
+        db, "ZONE_DELETED",
+        actor_id=current_user.user_id,
+        actor_username=current_user.username,
+        resource_type="zone",
+        resource_id=zone_id,
+    )
 
 
 @router.get("/{zone_id}/presence-log", response_model=list[PresenceLogEntry])
