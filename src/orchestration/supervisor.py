@@ -153,10 +153,17 @@ class CameraSupervisor:
             return  # still backing off after repeated crashes
 
         if await self._already_running_externally(camera_id):
+            # The camera IS running - we just didn't spawn this instance of
+            # it (e.g. a prior supervisor started it and the API server was
+            # since restarted, orphaning the child). Reflect the truth:
+            # "running", not "crashed". We don't own the OS process so the
+            # pid is unknown, but the operator's status pill must not lie.
             await self._set_status(
-                camera_id, state="crashed", pid=None,
-                last_error="camera_id already active externally (manual process?) - refusing to start a competing one",
+                camera_id, state="running", pid=None, last_error=None,
+                last_heartbeat_at=datetime.now(timezone.utc),
+                config_version_applied=row.config_version,
             )
+            logger.info("camera_supervisor_external_process_observed", camera_id=camera_id)
             return
 
         await self._spawn(row)
