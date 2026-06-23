@@ -7,8 +7,10 @@ import {
   rejectCandidate,
   fetchCropBlobUrl,
 } from '../api/client'
+import { usePolling } from '../api/usePolling'
 import { PersonPickerModal } from '../components/PersonPicker'
 import { invalidatePersonsCache } from '../api/personsCache'
+import { useFeedback } from '../components/feedbackContext'
 
 // candidate_id -> blob URL, fetched once per page session (mirrors the
 // vanilla dashboard's candImageCache) - module-level so it survives
@@ -47,12 +49,7 @@ export function CandidatesPage() {
     }
   }, [])
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh()
-    const interval = setInterval(refresh, 4000)
-    return () => clearInterval(interval)
-  }, [refresh])
+  usePolling(refresh, 4000)
 
   return (
     <div>
@@ -75,34 +72,60 @@ export function CandidatesPage() {
 }
 
 function CandidateCard({ candidate, onAction }: { candidate: Candidate; onAction: () => void }) {
+  const { confirm, prompt, toast } = useFeedback()
   const cropUrl = useCandidateCropUrl(candidate.candidate_id, candidate.crop_urls[0])
   const [showPicker, setShowPicker] = useState(false)
 
   async function handleApprove() {
-    const name = prompt('Display name for this new person:')
+    const name = await prompt({
+      title: 'Enroll new person',
+      label: 'Display name',
+      placeholder: 'e.g. Jane Doe',
+      confirmLabel: 'Enroll',
+    })
     if (!name) return
     await approveCandidate(candidate.candidate_id, name)
     invalidatePersonsCache()
+    toast(`Enrolled ${name}.`, 'success')
     onAction()
   }
 
   async function handleMergeSuggested() {
     if (!candidate.suggested_person_id) return
-    if (!confirm(`Merge this candidate into ${candidate.suggested_name}?`)) return
+    const ok = await confirm({
+      title: 'Merge candidate',
+      message: `Merge this candidate into ${candidate.suggested_name}?`,
+      confirmLabel: 'Merge',
+    })
+    if (!ok) return
     await mergeCandidate(candidate.candidate_id, candidate.suggested_person_id)
+    toast(`Merged into ${candidate.suggested_name}.`, 'success')
     onAction()
   }
 
   async function handleReject() {
-    if (!confirm('Reject this candidate?')) return
+    const ok = await confirm({
+      title: 'Reject candidate',
+      message: 'Reject this candidate? It will be removed from the queue.',
+      confirmLabel: 'Reject',
+      danger: true,
+    })
+    if (!ok) return
     await rejectCandidate(candidate.candidate_id)
+    toast('Candidate rejected.', 'info')
     onAction()
   }
 
   async function handlePick(personId: string, name: string) {
-    if (!confirm(`Merge this candidate into ${name}?`)) return
+    const ok = await confirm({
+      title: 'Merge candidate',
+      message: `Merge this candidate into ${name}?`,
+      confirmLabel: 'Merge',
+    })
+    if (!ok) return
     await mergeCandidate(candidate.candidate_id, personId)
     setShowPicker(false)
+    toast(`Merged into ${name}.`, 'success')
     onAction()
   }
 

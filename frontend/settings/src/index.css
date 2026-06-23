@@ -11,6 +11,11 @@ body {
 
 h1, h2, h3 { font-weight: 600; margin: 0; }
 
+/* Visible keyboard focus everywhere - matters now that modals trap Tab
+   and the app is navigable without a mouse. Mouse clicks don't trigger
+   :focus-visible, so this doesn't add outline noise for pointer users. */
+:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 3px; }
+
 #login-box {
   max-width: 320px; margin: 80px auto; padding: 24px; background: #161b22;
   border-radius: 8px; border: 1px solid #2a2f37;
@@ -32,6 +37,9 @@ h1, h2, h3 { font-weight: 600; margin: 0; }
   display: flex;
   align-items: center;
   gap: 24px;
+  position: sticky;
+  top: 0;
+  z-index: 40;
 }
 .settings-header h1 { font-size: 16px; flex: 0; white-space: nowrap; }
 
@@ -178,21 +186,89 @@ h1, h2, h3 { font-weight: 600; margin: 0; }
 .dot-error { background: #f87171; }
 
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+  position: fixed; inset: 0; background: rgba(0,0,0,0.78);
   z-index: 50; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(2px);
+  animation: overlay-in 0.12s ease-out;
 }
 .modal-box {
-  background: #161b22; border: 1px solid #2a2f37; border-radius: 8px;
-  padding: 16px; width: 420px; max-height: 85vh; overflow-y: auto;
+  background: #161b22; border: 1px solid #2a2f37; border-radius: 10px;
+  padding: 18px; width: 420px; max-height: 85vh; overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  animation: modal-in 0.14s ease-out;
 }
 .modal-head {
   display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 12px;
+  gap: 12px; margin-bottom: 14px;
 }
+.modal-head-actions { display: flex; gap: 6px; }
 .modal-head button {
   padding: 4px 10px; background: #2a2f37; color: #e6e6e6; border: none;
-  border-radius: 4px; cursor: pointer;
+  border-radius: 4px; cursor: pointer; font-size: 12px;
 }
+.modal-head button:hover { background: #353b45; }
+
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay, .modal-box, .toast { animation: none; }
+}
+
+/* promise-based confirm / prompt dialogs (FeedbackProvider) */
+.dialog-message { font-size: 14px; line-height: 1.5; margin: 0 0 16px; color: #d1d5db; }
+.dialog-label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 16px; }
+.dialog-label input {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 6px;
+  padding: 8px; background: #0e1116; color: #e6e6e6; border: 1px solid #2a2f37;
+  border-radius: 4px; font-size: 13px;
+}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions button {
+  padding: 7px 14px; border: none; border-radius: 4px; cursor: pointer;
+  font-size: 13px; background: #2a2f37; color: #e6e6e6;
+}
+.dialog-actions button:hover { filter: brightness(1.12); }
+.dialog-actions .btn-primary { background: #2563eb; color: #fff; }
+.dialog-actions .btn-danger { background: #dc2626; color: #fff; }
+.dialog-actions button:disabled { opacity: 0.5; cursor: default; }
+
+/* toast stack */
+.toast-stack {
+  position: fixed; bottom: 18px; right: 18px; z-index: 60;
+  display: flex; flex-direction: column; gap: 8px; max-width: min(360px, 90vw);
+}
+.toast {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border-radius: 6px; font-size: 13px; color: #e6e6e6;
+  background: #1c2128; border: 1px solid #2a2f37;
+  border-left: 3px solid #6b7280;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  animation: toast-in 0.16s ease-out;
+}
+.toast-success { border-left-color: #16a34a; }
+.toast-error { border-left-color: #dc2626; }
+.toast-info { border-left-color: #2563eb; }
+.toast span { flex: 1; }
+.toast-close {
+  background: none; border: none; color: #9ca3af; cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0; flex: 0;
+}
+.toast-close:hover { color: #e6e6e6; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* shared person/merge picker (CandidatesPage + EnrollPage) */
+.person-picker { display: flex; flex-direction: column; max-height: 70vh; }
+.picker-search {
+  margin-bottom: 8px; padding: 7px; background: #0e1116; color: #e6e6e6;
+  border: 1px solid #2a2f37; border-radius: 4px; box-sizing: border-box;
+}
+.picker-list { overflow-y: auto; flex: 1; }
 
 .camera-form label {
   display: block; font-size: 12px; color: #9ca3af; margin-bottom: 10px;

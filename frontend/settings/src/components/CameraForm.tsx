@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CameraDetail, CameraLaunchArgs, GpuStat, NewCameraInput } from '../api/client'
 import { useAdvancedMode } from './advancedModeContext'
+import { Modal } from './Modal'
 
 const DEFAULT_LAUNCH_ARGS: CameraLaunchArgs = {
   fps: 15,
@@ -71,12 +72,11 @@ export function CameraForm({ existing, gpus, onSubmit, onCancel }: Props) {
   }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="modal-box camera-form">
-        <div className="modal-head">
-          <strong>{existing ? `Edit ${existing.display_name}` : 'Add camera'}</strong>
-          <button onClick={onCancel}>Close</button>
-        </div>
+    <Modal
+      title={existing ? `Edit ${existing.display_name}` : 'Add camera'}
+      className="camera-form"
+      onClose={onCancel}
+    >
         {error && <div className="form-error">{error}</div>}
 
         <label>
@@ -200,7 +200,6 @@ export function CameraForm({ existing, gpus, onSubmit, onCancel }: Props) {
         <button className="btn-primary" disabled={submitting} onClick={handleSubmit}>
           {submitting ? 'Saving…' : existing ? 'Save changes' : 'Create camera'}
         </button>
-      </div>
-    </div>
+    </Modal>
   )
 }

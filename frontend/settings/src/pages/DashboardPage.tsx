@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { type CameraStatus, listCameras } from '../api/client'
+import { usePolling } from '../api/usePolling'
 import { CameraTile } from '../components/CameraTile'
 import { LiveViewModal } from '../components/LiveViewModal'
 
@@ -16,12 +17,7 @@ export function DashboardPage() {
     }
   }, [])
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh()
-    const interval = setInterval(refresh, 3000)
-    return () => clearInterval(interval)
-  }, [refresh])
+  usePolling(refresh, 3000)
 
   return (
     <div>
@@ -35,7 +31,16 @@ export function DashboardPage() {
       ) : (
         <div className="cam-grid">
           {cameras.map((cam) => (
-            <CameraTile key={cam.camera_id} camera={cam} onClick={() => setViewing(cam)} />
+            // Pause every tile's MJPEG stream while the live modal is open:
+            // the modal opens its own full-size stream, and browsers cap
+            // concurrent connections per host (~6) - no point holding grid
+            // streams nobody can see behind the overlay.
+            <CameraTile
+              key={cam.camera_id}
+              camera={cam}
+              paused={viewing !== undefined}
+              onClick={() => setViewing(cam)}
+            />
           ))}
         </div>
       )}

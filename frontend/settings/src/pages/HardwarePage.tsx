@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { type GpuStat, type SystemStats, getSystemStats } from '../api/client'
 import { useReconnectingWebSocket } from '../api/useReconnectingWebSocket'
+import { usePolling } from '../api/usePolling'
 import { GpuGauge } from '../components/GpuGauge'
 
 export function HardwarePage() {
@@ -12,12 +13,10 @@ export function HardwarePage() {
   }, [])
   const connected = useReconnectingWebSocket('/api/v1/hardware/gpu-stats-ws', onMessage)
 
-  useEffect(() => {
-    const fetchSystem = () => getSystemStats().then(setSystem).catch(() => {})
-    fetchSystem()
-    const interval = setInterval(fetchSystem, 5000)
-    return () => clearInterval(interval)
+  const fetchSystem = useCallback(() => {
+    getSystemStats().then(setSystem).catch(() => {})
   }, [])
+  usePolling(fetchSystem, 5000)
 
   return (
     <div>

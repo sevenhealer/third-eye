@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import {
   type ZoneStatus,
   type PresenceLogEntry,
@@ -8,8 +8,12 @@ import {
   updateZoneType,
   getPresenceLog,
 } from '../api/client'
+import { usePolling } from '../api/usePolling'
+import { Modal } from '../components/Modal'
+import { useFeedback } from '../components/feedbackContext'
 
 export function ZonesPage() {
+  const { toast } = useFeedback()
   const [zones, setZones] = useState<ZoneStatus[]>([])
   const [error, setError] = useState('')
   const [adding, setAdding] = useState(false)
@@ -25,19 +29,15 @@ export function ZonesPage() {
     }
   }, [])
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh()
-    const interval = setInterval(refresh, 3000)
-    return () => clearInterval(interval)
-  }, [refresh])
+  usePolling(refresh, 3000)
 
   async function handleTypeChange(zoneId: string, newType: string) {
     try {
       await updateZoneType(zoneId, newType)
       await refresh()
+      toast('Zone type updated.', 'success')
     } catch (e) {
-      alert(`Couldn't update zone type: ${e instanceof Error ? e.message : 'unknown error'}`)
+      toast(`Couldn't update zone type: ${e instanceof Error ? e.message : 'unknown error'}`, 'error')
     }
   }
 
@@ -120,33 +120,30 @@ export function ZonesPage() {
       )}
 
       {viewingLog && (
-        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setViewingLog(undefined)}>
-          <div className="modal-box">
-            <div className="modal-head">
-              <strong>{viewingLog.display_name} — who came and went</strong>
-              <button onClick={() => setViewingLog(undefined)}>Close</button>
-            </div>
-            {logMessage && <div className="hint">{logMessage}</div>}
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Who</th>
-                  <th>Entered</th>
-                  <th>Exited</th>
+        <Modal
+          title={`${viewingLog.display_name} — who came and went`}
+          onClose={() => setViewingLog(undefined)}
+        >
+          {logMessage && <div className="hint">{logMessage}</div>}
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Who</th>
+                <th>Entered</th>
+                <th>Exited</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logEntries.map((e, i) => (
+                <tr key={i} className={`log-row ${e.is_unknown ? 'unknown' : ''}`}>
+                  <td>{e.display_name}</td>
+                  <td>{new Date(e.entry_time).toLocaleString()}</td>
+                  <td>{e.exit_time ? new Date(e.exit_time).toLocaleString() : <span className="still-here">still here</span>}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {logEntries.map((e, i) => (
-                  <tr key={i} className={`log-row ${e.is_unknown ? 'unknown' : ''}`}>
-                    <td>{e.display_name}</td>
-                    <td>{new Date(e.entry_time).toLocaleString()}</td>
-                    <td>{e.exit_time ? new Date(e.exit_time).toLocaleString() : <span className="still-here">still here</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+              ))}
+            </tbody>
+          </table>
+        </Modal>
       )}
     </div>
   )
@@ -172,35 +169,29 @@ function AddZoneModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   }
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box camera-form" style={{ width: 300 }}>
-        <div className="modal-head">
-          <strong>Add zone</strong>
-          <button onClick={onClose}>Close</button>
-        </div>
-        {error && <div className="form-error">{error}</div>}
-        <label>
-          Zone ID
-          <input value={zoneId} placeholder="dining_room" onChange={(e) => setZoneId(e.target.value)} />
-        </label>
-        <label>
-          Display name
-          <input value={displayName} placeholder="Dining Room" onChange={(e) => setDisplayName(e.target.value)} />
-        </label>
-        <label>
-          Type
-          <select value={zoneType} onChange={(e) => setZoneType(e.target.value)}>
-            {ZONE_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="btn-primary" onClick={submit}>
-          Create zone
-        </button>
-      </div>
-    </div>
+    <Modal title="Add zone" className="camera-form" width={300} onClose={onClose}>
+      {error && <div className="form-error">{error}</div>}
+      <label>
+        Zone ID
+        <input value={zoneId} placeholder="dining_room" onChange={(e) => setZoneId(e.target.value)} />
+      </label>
+      <label>
+        Display name
+        <input value={displayName} placeholder="Dining Room" onChange={(e) => setDisplayName(e.target.value)} />
+      </label>
+      <label>
+        Type
+        <select value={zoneType} onChange={(e) => setZoneType(e.target.value)}>
+          {ZONE_TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="btn-primary" onClick={submit}>
+        Create zone
+      </button>
+    </Modal>
   )
 }

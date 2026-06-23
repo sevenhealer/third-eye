@@ -14,8 +14,11 @@ import {
   getCameraLog,
   listGpus,
 } from '../api/client'
+import { usePolling } from '../api/usePolling'
 import { CameraForm, type CameraFormSubmit } from '../components/CameraForm'
+import { Modal } from '../components/Modal'
 import { useAdvancedMode } from '../components/advancedModeContext'
+import { useFeedback } from '../components/feedbackContext'
 
 function statusDotClass(cam: CameraStatus): string {
   if (cam.process_state === 'running') return 'dot-online'
@@ -25,6 +28,7 @@ function statusDotClass(cam: CameraStatus): string {
 
 export function CamerasPage() {
   const { advanced } = useAdvancedMode()
+  const { confirm, toast } = useFeedback()
   const [cameras, setCameras] = useState<CameraStatus[]>([])
   const [gpus, setGpus] = useState<GpuStat[]>([])
   const [editing, setEditing] = useState<CameraDetail | undefined>(undefined)
@@ -42,16 +46,11 @@ export function CamerasPage() {
     }
   }, [])
 
+  usePolling(refresh, 3000)
+
   useEffect(() => {
-    // refresh()'s setState calls happen after its internal await, not
-    // synchronously within this effect body - standard fetch-on-mount,
-    // not the derived-state-from-props anti-pattern this lint rule targets.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh()
     listGpus().then(setGpus).catch(() => setGpus([]))
-    const interval = setInterval(refresh, 3000)
-    return () => clearInterval(interval)
-  }, [refresh])
+  }, [])
 
   async function handleCreate(input: CameraFormSubmit) {
     await createCamera(input as NewCameraInput)
@@ -112,11 +111,18 @@ export function CamerasPage() {
   }
 
   async function handleDelete(cameraId: string) {
-    if (!confirm(`Remove ${cameraId}? Its history is kept, it just stops showing up here.`)) return
+    const ok = await confirm({
+      title: 'Remove camera',
+      message: `Remove ${cameraId}? Its history is kept — it just stops showing up here.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    })
+    if (!ok) return
     setError('')
     try {
       await deleteCamera(cameraId)
       await refresh()
+      toast(`${cameraId} removed.`, 'success')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete camera.')
     }
@@ -192,19 +198,15 @@ export function CamerasPage() {
         <CameraForm existing={editing} gpus={gpus} onSubmit={handleSaveEdit} onCancel={() => setEditing(undefined)} />
       )}
       {viewingLog && (
-        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && setViewingLog(undefined)}>
-          <div className="modal-box log-modal">
-            <div className="modal-head">
-              <strong>{viewingLog} — log (last {logLines.length || 80} lines)</strong>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => openLog(viewingLog)}>Refresh</button>
-                <button onClick={() => setViewingLog(undefined)}>Close</button>
-              </div>
-            </div>
-            {logMessage && <div className="hint">{logMessage}</div>}
-            <pre className="log-output">{logLines.join('\n')}</pre>
-          </div>
-        </div>
+        <Modal
+          title={`${viewingLog} — log (last ${logLines.length || 80} lines)`}
+          className="log-modal"
+          onClose={() => setViewingLog(undefined)}
+          headerExtra={<button onClick={() => openLog(viewingLog)}>Refresh</button>}
+        >
+          {logMessage && <div className="hint">{logMessage}</div>}
+          <pre className="log-output">{logLines.join('\n')}</pre>
+        </Modal>
       )}
     </div>
   )

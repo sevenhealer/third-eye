@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { mjpegUrl } from '../api/client'
+import { Modal } from './Modal'
 
 interface Props {
   cameraId: string
@@ -22,14 +23,8 @@ export function LiveViewModal({ cameraId, displayName, onClose }: Props) {
   }, [])
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div className="modal-head">
-          <strong>{displayName}</strong>
-          <button onClick={onClose}>Close</button>
-        </div>
-        <img ref={imgRef} className="live-modal-img" src={mjpegUrl(cameraId)} alt={displayName} />
-      </div>
-    </div>
+    <Modal title={displayName} onClose={onClose}>
+      <img ref={imgRef} className="live-modal-img" src={mjpegUrl(cameraId)} alt={displayName} />
+    </Modal>
   )
 }
