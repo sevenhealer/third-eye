@@ -18,6 +18,7 @@ export function LoginPage() {
       if (!res.ok) throw new Error('Invalid credentials')
       const data = await res.json()
       sessionStorage.setItem('te_token', data.access_token)
+      sessionStorage.setItem('te_refresh', data.refresh_token)
       navigate('/', { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Login failed.')

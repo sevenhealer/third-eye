@@ -128,7 +128,37 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+// The access token is short-lived (15 min) by design; a single shared
+// in-flight refresh avoids every concurrent 401'd request racing its own
+// /refresh call. Falls back to the login bounce if there's no refresh
+// token or it's also expired (7-day lifetime).
+let refreshPromise: Promise<boolean> | null = null
+
+function tryRefresh(): Promise<boolean> {
+  const refreshToken = sessionStorage.getItem('te_refresh')
+  if (!refreshToken) return Promise.resolve(false)
+  if (!refreshPromise) {
+    refreshPromise = fetch('/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return false
+        const data = await res.json()
+        sessionStorage.setItem('te_token', data.access_token)
+        sessionStorage.setItem('te_refresh', data.refresh_token)
+        return true
+      })
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+  return refreshPromise
+}
+
+async function apiFetch<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
   const res = await fetch(path, {
     ...options,
     headers: {
@@ -138,7 +168,11 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
     },
   })
   if (res.status === 401) {
+    if (!_retried && (await tryRefresh())) {
+      return apiFetch<T>(path, options, true)
+    }
     sessionStorage.removeItem('te_token')
+    sessionStorage.removeItem('te_refresh')
     window.location.href = '/settings/login'
     throw new Error('Unauthorized')
   }

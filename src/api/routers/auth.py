@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
@@ -14,17 +15,23 @@ from src.api.auth import (
     verify_password,
 )
 from src.core.audit_log import write_audit_event
+from src.core.config import get_settings
 from src.core.database import get_db
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
+settings = get_settings()
 
 
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -70,6 +77,38 @@ async def login(
     return TokenResponse(
         access_token=create_access_token(payload),
         refresh_token=create_refresh_token(payload),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    credentials_exc = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired refresh token.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            body.refresh_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+        if payload.get("type") != "refresh":
+            raise credentials_exc
+    except jwt.InvalidTokenError:
+        raise credentials_exc
+
+    row = (
+        await db.execute(
+            text("SELECT user_id, username, role, is_active FROM users WHERE user_id = :uid"),
+            {"uid": payload.get("sub")},
+        )
+    ).fetchone()
+    if row is None or not row.is_active:
+        raise credentials_exc
+
+    new_payload = {"sub": str(row.user_id), "username": row.username, "role": row.role}
+    return TokenResponse(
+        access_token=create_access_token(new_payload),
+        refresh_token=create_refresh_token(new_payload),
     )
 
 
