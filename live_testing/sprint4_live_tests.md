@@ -103,6 +103,29 @@ live). At least one identity enrolled. Infra containers healthy
   orchestrator's reconciliation logic itself is broken — this is what
   actually happened once this session (a stale process survived a
   restart) and it's an easy trap to fall back into.
+- **A zone's presence log shows someone "still here" in a zone you
+  know they left** → was a real bug, fixed (2026-06-23): found live
+  testing the new Zones page — changing a camera's zone (or any
+  restart) killed the old process before it could fire `PERSON_EXITED`
+  for whoever it was tracking, leaving that `zone_presence` row open
+  forever. Graceful shutdown now explicitly closes any still-open rows.
+  Rows created *before* this fix are still stuck open (historical, not
+  retroactively patched — ask if you want them cleaned up).
+- **Someone/something shows as "Unknown" in a zone log but never shows
+  up in Pending Enrollments** → was a real bug, fixed (2026-06-23):
+  a borderline-similarity track (gallery match hovering at the accept
+  threshold) can flip `is_unknown` True/False frame to frame.
+  `CandidateCapture.observe()` discarded ALL accumulated evidence on a
+  *single* recognized frame, so such a track could flip back to
+  unknown before ever crossing the 5-good-view/3-second threshold —
+  repeatedly, never becoming a candidate despite real cumulative time
+  spent unknown. Now requires 5 *consecutive* recognized frames before
+  clearing progress. If this resurfaces, check
+  `src/face_recognition/candidates.py`'s `recognized_clear_streak`
+  logic wasn't reverted. A **genuine** stranger who's never recognized
+  at all was never affected by this bug — if a clean, well-lit,
+  several-second sighting of a true unknown still doesn't produce a
+  candidate, that's a new, different bug — report it.
 
 ### 🟡 DEFERRED — accept for now (NOT failures; later sprints)
 
