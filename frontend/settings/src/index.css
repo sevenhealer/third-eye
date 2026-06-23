@@ -141,6 +141,25 @@ h1, h2, h3 { font-weight: 600; margin: 0; }
 
 .badge { padding: 2px 7px; border-radius: 10px; font-size: 11px; background: #2a2f37; }
 .badge.restricted { background: #7f1d1d; color: #fecaca; }
+
+.cand-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.cand-card { background: #0e1116; border: 1px solid #2a2f37; border-radius: 6px; overflow: hidden; }
+.cand-card img { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: #1a1f27; display: block; }
+.cand-body { padding: 8px; font-size: 12px; }
+.cand-body .meta { color: #9ca3af; margin-bottom: 6px; }
+.cand-body .suggestion { color: #fbbf24; margin-bottom: 8px; }
+.cand-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.cand-actions button {
+  flex: 1; padding: 5px 6px; font-size: 11px; border: none; border-radius: 4px;
+  cursor: pointer; color: white;
+}
+.btn-approve { background: #16a34a; }
+.btn-merge { background: #2563eb; }
+.btn-merge-other { background: #1d4ed8; }
+.btn-reject { background: #dc2626; }
+.merge-row { padding: 8px; border-bottom: 1px solid #2a2f37; cursor: pointer; font-size: 13px; }
+.merge-row:hover { background: #1c2128; }
+
 .log-row.unknown { color: #fbbf24; }
 .still-here { color: #22c55e; }
 .zone-type-select {

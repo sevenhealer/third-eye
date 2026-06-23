@@ -88,6 +88,30 @@ export interface PresenceLogEntry {
   is_unknown: boolean
 }
 
+export interface Candidate {
+  candidate_id: string
+  track_id: string
+  camera_id: string
+  first_seen_at: string
+  last_seen_at: string
+  crop_count: number
+  crop_urls: string[]
+  status: string
+  suggested_person_id: string | null
+  suggested_name: string | null
+  suggested_similarity: number | null
+}
+
+export interface Person {
+  person_id: string
+  display_name: string
+  role: string | null
+  enrolled_at: string
+  is_active: boolean
+  last_seen_at: string | null
+  last_seen_zone: string | null
+}
+
 export interface SystemStats {
   cpu_pct: number
   memory_used_gb: number
@@ -145,6 +169,33 @@ export const updateZoneType = (zoneId: string, zone_type: string) =>
   apiFetch(`/api/v1/zones/${zoneId}`, { method: 'PATCH', body: JSON.stringify({ zone_type }) })
 export const getPresenceLog = (zoneId: string) =>
   apiFetch<PresenceLogEntry[]>(`/api/v1/zones/${zoneId}/presence-log`)
+
+export const listCandidates = () =>
+  apiFetch<{ candidates: Candidate[] }>('/api/v1/identities/candidates?status=pending')
+export const approveCandidate = (candidateId: string, displayName: string) =>
+  apiFetch(`/api/v1/identities/candidates/${candidateId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ display_name: displayName }),
+  })
+export const mergeCandidate = (candidateId: string, personId: string) =>
+  apiFetch(`/api/v1/identities/candidates/${candidateId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ person_id: personId }),
+  })
+export const rejectCandidate = (candidateId: string) =>
+  apiFetch(`/api/v1/identities/candidates/${candidateId}/reject`, { method: 'POST' })
+export const listIdentities = () => apiFetch<Person[]>('/api/v1/identities')
+
+// <img src> can't carry an Authorization header, and unlike camera frames
+// this isn't a continuous stream worth a dedicated endpoint - fetch once
+// as an authenticated blob and hand back an object URL. Caller owns
+// caching (see CandidatesPage's module-level cropUrlCache).
+export async function fetchCropBlobUrl(cropUrl: string): Promise<string | null> {
+  const res = await fetch(cropUrl, { headers: { Authorization: `Bearer ${getToken() || ''}` } })
+  if (!res.ok) return null
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)
+}
 
 export const listGpus = () => apiFetch<GpuStat[]>('/api/v1/hardware/gpus')
 export const getSystemStats = () => apiFetch<SystemStats>('/api/v1/hardware/system')
