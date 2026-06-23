@@ -469,6 +469,16 @@ Open `http://<box-ip>:8000/settings/` in a real browser (log in via
 - Does this *look* like part of the same product as `/dashboard`, or
   visually disjointed? (Same dark palette was used on purpose.)
 
+**Confirmed (2026-06-23):** login carryover and tab switching worked
+first try. First real-use feedback caught two genuine gaps, both fixed
+same day: `/dashboard` and `/settings` had no links between them at
+all (added a Settings link to the dashboard topbar, a Dashboard link to
+the Settings header — user-confirmed working after the fix); and the
+dashboard's small camera tiles were still laggy even after the modal's
+MJPEG fix earlier this sprint (they'd been left on the old 2s-poll
+snapshot — switched to the same MJPEG mechanism, user-confirmed smooth
+after the fix).
+
 ---
 
 ## STEP 8 — Camera orchestration: Settings edits that actually do something
@@ -556,6 +566,14 @@ spawned camera, and a pre-existing latent bug in `audit_log`'s
 hash-chain trigger that 500'd on certain detail content (any text
 containing a backslash) — neither is specific to your environment, both
 are fixed in this sprint's commits.
+
+**Confirmed (2026-06-23), steps 1-2, by the user's own hand:** created
+and started a real camera ("bedroom") via Settings independently, no
+guidance — it actually controlled a real `run_live.py` process, tracked
+correctly, ran stable for 17+ minutes. Found one more real gap doing
+this: a bad-RTSP camera showed "crashed" with no indication why — see
+step 6, fixed same day. Steps 3-5 (edit/stop/remove) still only
+backend-verified by me — worth trying on your own camera too.
 
 ---
 
