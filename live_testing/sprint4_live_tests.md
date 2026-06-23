@@ -50,6 +50,10 @@ live). At least one identity enrolled. Infra containers healthy
   there actually spawns/restarts/kills a real `run_live.py` process —
   not just a DB row changing. Hardware tab shows real, live GPU numbers.
   See STEP 7-9.
+- **`/dashboard/` redirects straight into the new React app** (STEP
+  10) — camera grid, zones, candidates, and alerts are all there now,
+  not on the old single-file page. The old page still exists at
+  `/dashboard-legacy` if you ever need it.
 
 ### ⚠ What can GO WRONG (real bugs — report these with console output)
 
@@ -86,6 +90,19 @@ live). At least one identity enrolled. Infra containers healthy
   are rare by nature. All four now use `pubsub.get_message(timeout=20.0)`
   instead, which just returns `None` on a quiet period. If this
   resurfaces, it's a regression of this exact fix, not a new bug.
+- **A page under `/settings/*` 404s on direct load or refresh, but
+  works fine when you click to it from the nav** → was a real bug,
+  fixed (2026-06-23): FastAPI's `StaticFiles(html=True)` only falls
+  back to `index.html` for the exact mount root, not arbitrary
+  react-router sub-paths. Replaced with an explicit catch-all route.
+  If this resurfaces, check `src/api/main.py`'s `serve_settings_spa`
+  wasn't reverted back to a plain `StaticFiles` mount.
+- **A camera appears to double-spawn (two PIDs for one camera_id) with
+  no manual process involved** → check `ss -tlnp | grep 8000` for more
+  than one uvicorn process bound to the port before assuming the
+  orchestrator's reconciliation logic itself is broken — this is what
+  actually happened once this session (a stale process survived a
+  restart) and it's an easy trap to fall back into.
 
 ### 🟡 DEFERRED — accept for now (NOT failures; later sprints)
 
@@ -248,15 +265,19 @@ re-verified at 36–241ms response time against the live system.
 
 ## STEP 4 — Dashboard: camera grid, zones, candidates, alerts (E10-S03)
 
-**Why a single static HTML file, no build tooling:** at the time this was
-written, this was framed as "an internal operator tool, not a
-customer-facing product." **Superseded (2026-06-23):** the user clarified
-this dashboard (and the new Settings app in STEP 7-9 below) *is* the
-product surface — operators/customers actually live in it. The vanilla
-dashboard stays as-is for now (it works, and a rewrite mid-sprint isn't
-worth the risk), but the new Settings app was deliberately built in React
-instead, as the first step of an incremental migration — see STEP 7.
-React/Vite/etc. would
+**Superseded (2026-06-23) — see STEP 10.** Everything described below
+in this STEP was rebuilt in React and `/dashboard` now redirects to the
+new app; the vanilla file described here still exists at
+`/dashboard-legacy` (untouched, working) but is no longer the primary
+surface. Left in place for the historical why/what-broke context below
+— skip straight to STEP 10 for the current state.
+
+**Why a single static HTML file, no build tooling (history):** at the
+time this was written, this was framed as "an internal operator tool,
+not a customer-facing product." The user clarified that framing was
+wrong — this dashboard (and the new Settings app from STEP 7 onward)
+*is* the product surface — which is what ultimately led to the full
+migration in STEP 10. React/Vite/etc. would
 add a build step and a node_modules tree for a page that's a login form,
 three polling loops, and a WebSocket. FastAPI's `StaticFiles` serves it
 directly at `/dashboard`; snapshots are served from `/stream` the same
@@ -614,6 +635,104 @@ live.
 
 ---
 
+## STEP 10 — Dashboard migration: the whole operator UI is now React
+
+**What changed:** the vanilla-JS `/dashboard` (camera grid, zones,
+candidates, alerts — STEP 4 above) has been fully rebuilt inside the
+Settings React app and `/dashboard` now redirects there. This was a
+user decision mid-sprint ("you know how a modern admin panel should
+look, right?") after the Settings app proved out React as the new
+direction — rather than two separately-loaded apps cross-linking each
+other, there's now one shell with real, URL-addressable pages.
+
+**Library: `react-router-dom`.** Going from the Settings app's
+original 3 tabs (via local `useState`) to 7 pages is the threshold
+where tab-switching stops working well — you can't deep-link to a
+specific zone's log, bookmark the candidates queue, or use the
+browser's back button sensibly. `<BrowserRouter basename="/settings">`
++ a `RequireAuth` layout route (one auth check, above the router, not
+duplicated per page — same single-check-per-load behavior the old app
+already had) + `<AppShell>` (persistent header/nav wrapping
+`<Outlet/>`).
+
+**New pages, each replacing a section of the old single-file dashboard:**
+- **Dashboard** (`/settings/`, the new landing page) — camera tile grid
+  + click-to-expand modal, same MJPEG mechanism as before. The
+  important invariant ported over: an `<img src>` must never be
+  recomputed from state that changes on a poll tick (camera status,
+  not camera_id) or the stream restarts every refresh — in React this
+  falls out naturally from prop diffing (`src` computed only from
+  `camera_id` + the stable session token) rather than needing a manual
+  "build the DOM node once" cache like the vanilla version used.
+- **Zones** (`/settings/zones`) — table, inline type `<select>`,
+  Add-zone, click-a-row presence-log modal. Direct port.
+- **Candidates** (`/settings/candidates`) — Pending Enrollments queue.
+  The one genuinely new piece of logic: face-crop images need an
+  authenticated blob fetch (`<img src>` can't carry a Bearer token),
+  cached in a module-level `Map` for the page session, same idea as the
+  vanilla `candImageCache` global. The merge-to-other picker uses real
+  closures over the actual person object instead of building HTML
+  strings, so a display name with an apostrophe can't break anything —
+  the vanilla version needed an explicit comment warning about this
+  exact risk; JSX sidesteps the whole bug class.
+- **Alerts** (`/settings/alerts`) — promoted from a corner panel on the
+  old dashboard to its own page, on the theory that alerts are a queue
+  to act on, not a widget to glance at. Same live WebSocket feed.
+
+**Why a redirect, not deleting the old dashboard:** `/dashboard` now
+redirects to `/settings/`, but the original vanilla file is untouched
+and still reachable at **`/dashboard-legacy`** as a manual rollback
+path — visible from Settings' System page (Advanced mode) if you ever
+need to compare or fall back. Deleting it outright is a deliberately
+separate, later, more cautious step after a burn-in period with no
+regressions — not done yet.
+
+**Found while building this:** a stale uvicorn process from an earlier
+restart this session had silently survived several `kill` calls and
+was still running its own independent camera supervisor — every camera
+start briefly produced two competing processes until the duplicate was
+found and killed. Not a code bug, but worth knowing as a debugging
+pattern: if a camera ever seems to double-spawn, check `ss -tlnp | grep
+8000` for more than one process bound to the port before assuming the
+orchestrator itself is broken.
+
+```bash
+.venv/bin/python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+```
+
+Visit `http://<box-ip>:8000/dashboard/` — it should immediately
+redirect to `/settings/` and land you on the new Dashboard page with
+your existing session, no second login.
+
+**👀 Needs your eyes — this is the actual pass bar for this step:**
+- Does `/dashboard/` redirect cleanly into the new app?
+- **Dashboard page:** camera tiles smooth, click-to-expand opens the
+  same live feed, closing it doesn't leave the tile broken.
+- **Zones page:** click a zone, see its real history; change a type,
+  confirm it sticks after a reload.
+- **Candidates page:** do the face-crop photos actually load (this is
+  the most likely silent-failure spot — a broken auth header just shows
+  a blank image, easy to miss)? Try the search-as-you-type merge
+  picker on a real pending candidate if you have one.
+- **Alerts page:** does it show "Connected" status correctly? (A real
+  alert is rare enough that just confirming the connection indicator
+  is probably enough here, rather than waiting for one to fire.)
+- Overall: does this feel like one coherent product now, vs. the
+  earlier two-apps-with-a-cross-link stopgap?
+
+**Backend-verified by me already (wiring only):** every page driven
+end-to-end via headless Chrome against real data this session —
+2 concurrent real cameras rendering simultaneously with independent
+Redis subscriptions (confirmed via `PUBSUB NUMSUB`, no cross-talk), a
+synthetic candidate's crop image loading as a real authenticated blob
+and a real Reject hitting the audit log, a real HIGH+CRITICAL alert
+firing and arriving over the Alerts page's WebSocket, and the
+`/dashboard/` → `/settings/` redirect landing cleanly with a live
+session. None of this replaces your own read on whether it's actually
+*usable* day to day.
+
+---
+
 ## Cleanup (optional)
 
 ```bash
@@ -649,8 +768,10 @@ DELETE FROM cameras WHERE camera_id = '<your_test_camera_id>';"
       confirmed 36–241ms against real zones/identities
 - [ ] Unknown person triggers enrollment candidate **visible in the
       operator UI** within 30 seconds — candidate creation/capture was
-      Sprint 3; the UI surface is built this sprint — **needs your visual
-      confirmation (STEP 4)**
+      Sprint 3; the UI surface (now the React Candidates page, STEP 10,
+      superseding the original STEP 4 vanilla version) is
+      backend-verified by me; **still needs your own visual
+      confirmation on the new page**
 - [ ] Printed photo rejected by anti-spoofing in 100% of basic test
       cases — **intentionally deferred to Sprint 5**, not a Sprint 4 gap
       (see sprint2 live-test doc)
@@ -680,3 +801,9 @@ what's original vs. added.
       found along the way
 - [x] Hardware tab shows real, live-updating GPU/CPU/RAM/disk stats —
       confirmed by the user (STEP 9)
+- [ ] Full dashboard migration: Dashboard/Zones/Candidates/Alerts pages
+      all working in the new React app, `/dashboard` redirecting
+      cleanly, `/dashboard-legacy` still available as rollback —
+      backend-verified by me end-to-end (2 concurrent real cameras, a
+      real candidate crop+reject, a real fired alert), **still needs
+      your own walkthrough (STEP 10)**
