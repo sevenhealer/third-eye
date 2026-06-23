@@ -162,6 +162,15 @@ h1, h2, h3 { font-weight: 600; margin: 0; }
 
 .log-row.unknown { color: #fbbf24; }
 .still-here { color: #22c55e; }
+
+.alerts-list { list-style: none; margin: 0; padding: 0; }
+.alerts-list li {
+  padding: 10px; border-bottom: 1px solid #2a2f37; font-size: 13px; display: flex;
+  justify-content: space-between; gap: 10px;
+}
+.sev-HIGH, .sev-CRITICAL { color: #f87171; }
+.sev-MEDIUM { color: #fbbf24; }
+.sev-LOW { color: #9ca3af; }
 .zone-type-select {
   background: #0e1116; color: #e6e6e6; border: 1px solid #2a2f37;
   border-radius: 4px; font-size: 12px; padding: 2px;
