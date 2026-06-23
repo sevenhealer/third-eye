@@ -1,15 +1,31 @@
-.PHONY: help up down logs shell test lint format check-env setup install install-gpu
+.PHONY: help up down logs shell test lint format check-env setup install install-gpu \
+        infra reset serve stop frontend-build fresh
 
 COMPOSE = docker compose
 APP_SERVICE = api
 
+# Native dev run: infra (Postgres/Redis/MinIO/Neo4j) runs in Docker, the API
+# server runs from .venv on the host (so it sees the local GPU directly).
+INFRA_SERVICES = postgres redis minio neo4j
+# Bound graceful shutdown so an open WebSocket can't hang uvicorn on SIGTERM
+# (which used to orphan camera workers across restarts).
+GRACEFUL_SHUTDOWN_S = 10
+
 help:
 	@echo "Third-Eye Visual Intelligence Platform"
 	@echo ""
-	@echo "  make setup        Generate/top-up .env with strong random secrets"
+	@echo "  ── one-command dev (app runs natively, infra in Docker) ──"
 	@echo "  make install      Install deps into .venv (Mac / CPU dev)"
 	@echo "  make install-gpu  Install deps into .venv (Linux + NVIDIA GPU)"
-	@echo "  make up           Start all services"
+	@echo "  make fresh        CLEAN SLATE: stop, wipe all data, rebuild UI, run"
+	@echo "  make serve        Run the API server (foreground; Ctrl+C stops it)"
+	@echo "  make reset        DESTRUCTIVE: wipe all data, reseed admin/admin + zones"
+	@echo "  make stop         Stop the native API server + camera workers"
+	@echo "  make infra        Start just the infra containers"
+	@echo ""
+	@echo "  ── full containerized stack / ops ──"
+	@echo "  make setup        Generate/top-up .env with strong random secrets"
+	@echo "  make up           Start all services (containerized)"
 	@echo "  make down         Stop all services"
 	@echo "  make logs         Follow logs from all services"
 	@echo "  make logs s=api   Follow logs from a specific service"
@@ -38,6 +54,36 @@ install-gpu:
 	.venv/bin/pip install torch torchvision torchaudio \
 		--index-url https://download.pytorch.org/whl/cu128
 	.venv/bin/pip install -e ".[dev]"
+
+# ── Native dev workflow ───────────────────────────────────────────────────────
+infra: check-env
+	$(COMPOSE) up -d $(INFRA_SERVICES)
+	@echo "Infra up: Postgres, Redis, MinIO, Neo4j."
+
+frontend-build:
+	cd frontend/settings && npm install && npm run build
+
+reset: infra
+	@echo "Wiping ALL data (embeddings, persons, cameras, events, crops) ..."
+	.venv/bin/python scripts/reset_db.py
+
+stop:
+	@bash scripts/stop_native.sh
+
+serve: check-env
+	@echo "API on http://localhost:8000  (dashboard: /settings/ , login admin/admin)"
+	.venv/bin/python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 \
+		--timeout-graceful-shutdown $(GRACEFUL_SHUTDOWN_S)
+
+# One command for a clean test slate: stop anything running, wipe every data
+# store, rebuild the UI bundle, then run the server in the foreground.
+fresh: stop infra reset frontend-build
+	@echo ""
+	@echo "──────────────────────────────────────────────"
+	@echo "  Clean slate ready.  Login:  admin / admin"
+	@echo "  Dashboard: http://localhost:8000/settings/"
+	@echo "──────────────────────────────────────────────"
+	@$(MAKE) serve
 
 up: check-env
 	$(COMPOSE) up -d --build

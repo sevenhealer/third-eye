@@ -7,8 +7,9 @@ camera disconnect watchdog and reconnect (E01-S04), admin enrollment
 approval flow (E02-S07, carried from Sprint 3).
 
 Prerequisites: Sprint 3 fully passed (objects/events/tracking/candidates
-live). At least one identity enrolled. Infra containers healthy
-(`docker compose ps` — postgres, redis, minio at minimum).
+live). Start from a clean slate with **`make fresh`** (STEP 0) — this run
+is exercised from an empty system (no cameras/people/events), so
+enrolling the first identity is part of the test, not a precondition.
 
 > **BUILD STATUS: all components (the original five plus the Settings
 > app/orchestration/hardware monitoring added mid-sprint, STEP 7-9) are
@@ -186,14 +187,38 @@ live). At least one identity enrolled. Infra containers healthy
 
 ---
 
-## STEP 0 — Infrastructure
+## STEP 0 — One-command clean slate
+
+This sprint is tested from an **empty system**: no cameras, no enrolled
+people, no events — only the 4 default zones and the `admin` login. One
+command stops anything running, wipes every data store, rebuilds the UI,
+and starts the server:
 
 ```bash
-docker compose up -d postgres redis minio
-docker compose ps
+make fresh
 ```
 
-**Expected:** all three `healthy`.
+That chains: `stop` → `infra` (Postgres/Redis/MinIO/Neo4j in Docker) →
+`reset` (DESTRUCTIVE wipe + reseed) → `frontend-build` → `serve`
+(foreground; **Ctrl+C stops it cleanly** now that uvicorn runs with a
+bounded `--timeout-graceful-shutdown`). Individual pieces if you need
+them: `make infra`, `make reset`, `make serve`, `make stop`.
+
+**Login:** `admin` / `admin`.  **Dashboard:** http://localhost:8000/settings/
+
+What a clean slate means for this run:
+- `make reset` truncates every data table (embeddings, persons, cameras,
+  zone_presence, events, candidates) and empties the MinIO crop bucket,
+  Redis, and the Neo4j graph — then reseeds **admin/admin** and the 4
+  default zones (`building_entrance`, `room_a`, `server_room`,
+  `corridor_main`). Schema/migrations are preserved (TRUNCATE, not DROP).
+- So "at least one identity enrolled" is **no longer a prerequisite** —
+  enrolling someone (Enroll page, or approving a Pending candidate) is
+  now part of the test, starting from zero.
+
+**Expected:** `make fresh` ends with the server logging `third_eye_ready`
+and the login page reachable. `docker compose ps` shows the infra
+containers `healthy`.
 
 ---
 
@@ -203,9 +228,10 @@ docker compose ps
 .venv/bin/python -m pytest tests/unit -q
 ```
 
-**Expected:** `259 passed` (covers `test_query_planner.py`,
-`test_frame_producer.py`'s new reconnect tests, and everything from
-prior sprints — regressions here block the sprint).
+**Expected:** `272 passed` (covers `test_query_planner.py`,
+`test_frame_producer.py`'s reconnect tests, `test_manual_enroll.py`'s
+guided-capture tests, and everything from prior sprints — regressions
+here block the sprint).
 
 ---
 
