@@ -63,6 +63,31 @@ export interface DiskStat {
   total_gb: number
 }
 
+export const ZONE_TYPES = ['general', 'restricted', 'entrance', 'exit', 'monitored'] as const
+
+export interface ZoneOccupant {
+  person_id: string
+  display_name: string
+}
+
+export interface ZoneStatus {
+  zone_id: string
+  display_name: string
+  zone_type: string
+  occupant_count: number
+  occupants: ZoneOccupant[]
+  object_counts: Record<string, number>
+}
+
+export interface PresenceLogEntry {
+  person_id: string | null
+  display_name: string
+  camera_id: string | null
+  entry_time: string
+  exit_time: string | null
+  is_unknown: boolean
+}
+
 export interface SystemStats {
   cpu_pct: number
   memory_used_gb: number
@@ -112,6 +137,14 @@ export const stopCamera = (id: string) => apiFetch(`/api/v1/cameras/${id}/stop`,
 export const deleteCamera = (id: string) => apiFetch(`/api/v1/cameras/${id}`, { method: 'DELETE' })
 export const getCameraLog = (id: string) =>
   apiFetch<{ lines: string[]; message?: string }>(`/api/v1/cameras/${id}/log?lines=80`)
+
+export const listZones = () => apiFetch<ZoneStatus[]>('/api/v1/zones')
+export const createZone = (body: { zone_id: string; display_name: string; zone_type: string }) =>
+  apiFetch('/api/v1/zones', { method: 'POST', body: JSON.stringify(body) })
+export const updateZoneType = (zoneId: string, zone_type: string) =>
+  apiFetch(`/api/v1/zones/${zoneId}`, { method: 'PATCH', body: JSON.stringify({ zone_type }) })
+export const getPresenceLog = (zoneId: string) =>
+  apiFetch<PresenceLogEntry[]>(`/api/v1/zones/${zoneId}/presence-log`)
 
 export const listGpus = () => apiFetch<GpuStat[]>('/api/v1/hardware/gpus')
 export const getSystemStats = () => apiFetch<SystemStats>('/api/v1/hardware/system')
