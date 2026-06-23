@@ -16,7 +16,7 @@ function Bar({ label, pct, sublabel }: { label: string; pct: number; sublabel: s
       <div className="gpu-bar-track">
         <div
           className="gpu-bar-fill"
-          style={{ width: `${Math.min(pct, 100)}%`, background: barColor(pct) }}
+          style={{ width: `${Math.min(pct, 100)}%`, background: barColor(pct), color: barColor(pct) }}
         />
       </div>
     </div>

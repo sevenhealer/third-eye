@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Icon } from '../components/Icon'
 
 export function LoginPage() {
   const [username, setUsername] = useState('')
@@ -27,7 +28,12 @@ export function LoginPage() {
 
   return (
     <div id="login-box">
-      <h2 style={{ marginTop: 0 }}>Third-Eye Login</h2>
+      <h2 style={{ marginTop: 0 }}>
+        <span className="brand-mark">
+          <Icon name="eye" />
+        </span>
+        Third-Eye
+      </h2>
       <form onSubmit={handleSubmit}>
         <input
           placeholder="Username"
