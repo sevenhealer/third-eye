@@ -67,10 +67,6 @@ export function EnrollPage() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
     } catch (e) {
       setError(
         e instanceof DOMException && e.name === 'NotAllowedError'
@@ -85,15 +81,17 @@ export function EnrollPage() {
       setSession(s)
       sessionIdRef.current = s.session_id
       setFrameResult(null)
+      // The <video> for this stream only mounts in the 'capturing' phase, so
+      // the effect above attaches the stream and starts the capture loop
+      // once the element exists — not here.
       setPhase('capturing')
-      intervalRef.current = setInterval(captureFrame, FRAME_INTERVAL_MS)
     } catch (e) {
       stopCamera()
       setError(e instanceof Error ? e.message : 'Failed to start enrollment session.')
     }
   }
 
-  async function captureFrame() {
+  const captureFrame = useCallback(async () => {
     const video = videoRef.current
     const canvas = canvasRef.current
     const sessionId = sessionIdRef.current
@@ -120,7 +118,28 @@ export function EnrollPage() {
     } catch {
       // a single dropped frame isn't worth surfacing - the next tick retries
     }
-  }
+  }, [stopCamera])
+
+  // Once the <video> is mounted for the capturing phase, attach the live
+  // stream and start the per-frame capture loop. Doing this in an effect
+  // (not in handleStart) is the fix for the "green light on, no preview"
+  // bug: handleStart runs while the page is still on the idle view, so the
+  // <video> element doesn't exist yet and srcObject had nowhere to attach.
+  useEffect(() => {
+    if (phase !== 'capturing') return
+    const video = videoRef.current
+    const stream = streamRef.current
+    if (!video || !stream) return
+    video.srcObject = stream
+    video.play().catch(() => {})
+    intervalRef.current = setInterval(captureFrame, FRAME_INTERVAL_MS)
+    return () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+  }, [phase, captureFrame])
 
   async function handleCancel() {
     stopCamera()
