@@ -422,6 +422,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .enroll-prompt { font-size: 18px; font-weight: 650; margin-bottom: 10px; }
 .enroll-pose-list { display: flex; gap: 7px; flex-wrap: wrap; margin: 12px 0; }
 .badge-done { background: rgba(20, 83, 45, 0.5); color: #86efac; border-color: rgba(52, 211, 153, 0.3); }
+.enroll-suggestion {
+  margin-top: 12px; padding: 12px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 9px; max-width: 340px; font-size: 13px;
+}
+.enroll-suggestion.strong { border-color: rgba(56, 189, 248, 0.45); background: var(--accent-soft); }
+.enroll-suggestion .btn-merge {
+  align-self: flex-start; padding: 7px 13px; border: none; border-radius: var(--radius-sm);
+  background: var(--accent-strong); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.enroll-suggestion .btn-merge:hover { filter: brightness(1.1); }
 .enroll-finalize-form { display: flex; flex-direction: column; gap: 9px; max-width: 340px; margin-top: 12px; }
 .enroll-finalize-form input {
   padding: 10px; background: var(--inset); color: var(--text);

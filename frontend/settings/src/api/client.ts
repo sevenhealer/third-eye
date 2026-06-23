@@ -300,6 +300,18 @@ export interface EnrollFinalizeResult {
   templates_added: number
 }
 
+export interface EnrollSuggestionMatch {
+  person_id: string
+  display_name: string
+  similarity: number
+  likely_same: boolean
+}
+
+export const getEnrollSuggestion = (sessionId: string) =>
+  apiFetch<{ match: EnrollSuggestionMatch | null }>(
+    `/api/v1/manual-enroll/sessions/${sessionId}/suggestion`,
+  )
+
 export const finalizeEnrollSession = (
   sessionId: string,
   body: { display_name?: string; role?: string; person_id?: string },

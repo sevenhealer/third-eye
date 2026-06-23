@@ -3,10 +3,12 @@ import {
   type EnrollSession,
   type EnrollFrameResult,
   type EnrollFinalizeResult,
+  type EnrollSuggestionMatch,
   createEnrollSession,
   submitEnrollFrame,
   discardEnrollSession,
   finalizeEnrollSession,
+  getEnrollSuggestion,
 } from '../api/client'
 import { PersonPickerModal } from '../components/PersonPicker'
 import { invalidatePersonsCache } from '../api/personsCache'
@@ -23,6 +25,7 @@ export function EnrollPage() {
   const [displayName, setDisplayName] = useState('')
   const [role, setRole] = useState('visitor')
   const [showPicker, setShowPicker] = useState(false)
+  const [suggestion, setSuggestion] = useState<EnrollSuggestionMatch | null>(null)
   const [result, setResult] = useState<EnrollFinalizeResult | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -141,6 +144,15 @@ export function EnrollPage() {
     }
   }, [phase, captureFrame])
 
+  // On reaching review, ask the server whether this face already looks like
+  // someone enrolled, so the operator can merge instead of duplicating.
+  useEffect(() => {
+    if (phase !== 'review' || !sessionIdRef.current) return
+    getEnrollSuggestion(sessionIdRef.current)
+      .then((r) => setSuggestion(r.match))
+      .catch(() => {})
+  }, [phase])
+
   async function handleCancel() {
     stopCamera()
     if (sessionIdRef.current) {
@@ -185,6 +197,7 @@ export function EnrollPage() {
     setFrameResult(null)
     setDisplayName('')
     setRole('visitor')
+    setSuggestion(null)
     setResult(null)
     setError('')
     setPhase('idle')
@@ -261,6 +274,27 @@ export function EnrollPage() {
           {phase === 'review' && (
             <div className="enroll-status">
               <div className="enroll-prompt">Capture complete — {progress} crops</div>
+
+              {suggestion && (
+                <div className={`enroll-suggestion${suggestion.likely_same ? ' strong' : ''}`}>
+                  <div>
+                    {suggestion.likely_same ? 'This looks like ' : 'Possible match: '}
+                    <strong>{suggestion.display_name}</strong>{' '}
+                    <span className="hint">(similarity {suggestion.similarity})</span>
+                  </div>
+                  <button
+                    className="btn-merge"
+                    disabled={submitting}
+                    onClick={() => finalize({ person_id: suggestion.person_id })}
+                  >
+                    Merge into {suggestion.display_name}
+                  </button>
+                </div>
+              )}
+
+              <div className="advanced-section-label" style={{ marginTop: 14 }}>
+                {suggestion ? 'Or enroll as a new person' : 'Enroll as a new person'}
+              </div>
               <form onSubmit={handleEnrollNew} className="enroll-finalize-form">
                 <input
                   placeholder="Display name"
@@ -282,7 +316,7 @@ export function EnrollPage() {
                 disabled={submitting}
                 onClick={() => setShowPicker(true)}
               >
-                Add to an existing person…
+                Add to a different existing person…
               </button>
               <button className="btn-danger" style={{ marginTop: 8 }} onClick={handleCancel} disabled={submitting}>
                 Discard capture
