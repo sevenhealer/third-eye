@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,15 @@ class ZoneStatus(BaseModel):
     occupant_count: int
     occupants: list[dict]
     object_counts: dict[str, int]
+
+
+class PresenceLogEntry(BaseModel):
+    person_id: str | None
+    display_name: str
+    camera_id: str | None
+    entry_time: str
+    exit_time: str | None
+    is_unknown: bool
 
 
 @router.get("", response_model=list[ZoneStatus])
@@ -67,3 +76,39 @@ async def list_zones(
             object_counts=object_counts,
         ))
     return zones
+
+
+@router.get("/{zone_id}/presence-log", response_model=list[PresenceLogEntry])
+async def get_zone_presence_log(
+    zone_id: str,
+    current_user: ActiveUser,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, le=200),
+) -> list[PresenceLogEntry]:
+    """Who entered/exited this zone and when. zone_presence is written by
+    the live pipeline's ZonePresenceMonitor (see sprint4 live-test STEP 2)
+    on every PERSON_ENTERED/PERSON_EXITED — this just reads that history
+    back, most recent first."""
+    rows = (await db.execute(
+        text("""
+            SELECT zp.person_id, p.display_name, zp.camera_id,
+                   zp.entry_time, zp.exit_time, zp.is_unknown
+            FROM zone_presence zp
+            LEFT JOIN persons p ON p.person_id = zp.person_id
+            WHERE zp.zone_id = :zone_id
+            ORDER BY zp.entry_time DESC
+            LIMIT :limit
+        """),
+        {"zone_id": zone_id, "limit": limit},
+    )).fetchall()
+    return [
+        PresenceLogEntry(
+            person_id=str(r.person_id) if r.person_id else None,
+            display_name=r.display_name or ("Unknown" if r.is_unknown else "Unknown (unresolved)"),
+            camera_id=r.camera_id,
+            entry_time=r.entry_time.isoformat(),
+            exit_time=r.exit_time.isoformat() if r.exit_time else None,
+            is_unknown=r.is_unknown or False,
+        )
+        for r in rows
+    ]

@@ -66,6 +66,10 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2f37; }
   th { color: #9ca3af; font-weight: 500; }
+  #zones-table tbody tr { cursor: pointer; }
+  #zones-table tbody tr:hover { background: #1c2128; }
+  .log-row.unknown { color: #fbbf24; }
+  .log-row .still-here { color: #22c55e; }
   .badge { padding: 2px 7px; border-radius: 10px; font-size: 11px; background: #2a2f37; }
   .badge.restricted { background: #7f1d1d; color: #fecaca; }
   #alerts-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
@@ -155,6 +159,19 @@
     </div>
     <input id="merge-search" placeholder="Search people..." oninput="renderMergeList()">
     <div id="merge-list" style="overflow-y:auto; flex:1;"></div>
+  </div>
+</div>
+
+<div id="zonelog-modal" class="modal-overlay" onclick="if(event.target===this) closeZoneLog()">
+  <div class="modal-box" style="width:480px; max-height:75vh; display:flex; flex-direction:column;">
+    <div class="modal-head">
+      <strong id="zonelog-title">Zone log</strong>
+      <button onclick="closeZoneLog()">Close</button>
+    </div>
+    <table style="width:100%; font-size:12px;">
+      <thead><tr><th>Who</th><th>Entered</th><th>Exited</th></tr></thead>
+      <tbody id="zonelog-body"></tbody>
+    </table>
   </div>
 </div>
 
@@ -289,14 +306,42 @@ async function refreshZones() {
   if (res.status === 401) return logout();
   const zones = await res.json();
   const tbody = document.querySelector('#zones-table tbody');
-  tbody.innerHTML = zones.map(z => `
-    <tr>
+  tbody.innerHTML = '';
+  for (const z of zones) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
       <td>${z.display_name}</td>
       <td><span class="badge ${z.zone_type === 'restricted' ? 'restricted' : ''}">${z.zone_type}</span></td>
       <td>${z.occupants.length ? z.occupants.map(o => o.display_name).join(', ') : '—'}</td>
-      <td>${Object.entries(z.object_counts).map(([k,v]) => `${k}:${v}`).join(', ') || '—'}</td>
+      <td>${Object.entries(z.object_counts).map(([k,v]) => `${k}:${v}`).join(', ') || '—'}</td>`;
+    tr.onclick = () => openZoneLog(z.zone_id, z.display_name);
+    tbody.appendChild(tr);
+  }
+}
+
+async function openZoneLog(zoneId, displayName) {
+  document.getElementById('zonelog-title').textContent = `${displayName} — who came and went`;
+  document.getElementById('zonelog-body').innerHTML = '<tr><td colspan="3" class="empty">Loading...</td></tr>';
+  document.getElementById('zonelog-modal').style.display = 'flex';
+  const res = await fetch(`/api/v1/zones/${zoneId}/presence-log`, { headers: authHeaders() });
+  if (res.status === 401) return logout();
+  const entries = await res.json();
+  const body = document.getElementById('zonelog-body');
+  if (!entries.length) {
+    body.innerHTML = '<tr><td colspan="3" class="empty">No recorded visits yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = entries.map(e => `
+    <tr class="log-row ${e.is_unknown ? 'unknown' : ''}">
+      <td>${e.display_name}</td>
+      <td>${new Date(e.entry_time).toLocaleString()}</td>
+      <td>${e.exit_time ? new Date(e.exit_time).toLocaleString() : '<span class="still-here">still here</span>'}</td>
     </tr>
   `).join('');
+}
+
+function closeZoneLog() {
+  document.getElementById('zonelog-modal').style.display = 'none';
 }
 
 const candImageCache = {};   // candidate_id -> blob URL, fetched once per page session
