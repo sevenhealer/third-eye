@@ -90,5 +90,11 @@ htmlcov/
 mlruns/
 mlflow.db
 
+# Frontend (frontend/settings and any future React/Vite app) — each has its
+# own .gitignore too, but node_modules is exactly the class of huge
+# generated directory this file exists to keep out, so cover it here too.
+# dist/ above already catches each app's build output.
+node_modules/
+
 # Docker
 *.pid
