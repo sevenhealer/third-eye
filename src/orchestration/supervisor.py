@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import time
 from datetime import datetime, timezone
@@ -248,7 +249,7 @@ class CameraSupervisor:
         if intentional:
             await self._set_status(
                 camera_id, state="stopped", pid=None, last_exit_code=proc.returncode,
-                last_error=None,
+                last_error=None, restart_count=0,
             )
             self._crash_state.pop(camera_id, None)
             return
@@ -272,6 +273,7 @@ class CameraSupervisor:
         await self._set_status(
             camera_id, state="crashed", pid=None, last_exit_code=proc.returncode,
             last_error=f"exited after {uptime:.1f}s (code {proc.returncode}); retrying in {backoff}s",
+            restart_count=crash.consecutive_fails,
         )
 
     async def _stop_process(self, camera_id: str, proc: asyncio.subprocess.Process) -> None:
@@ -301,9 +303,18 @@ class CameraSupervisor:
         update_clause = ", ".join(f"{c} = :{c}" for c in cols)
         params = {"camera_id": camera_id, **fields}
         async with get_db_session() as session:
-            await session.execute(text(f"""
+            row = (await session.execute(text(f"""
                 INSERT INTO camera_process_status ({", ".join(insert_cols)})
                 VALUES ({", ".join(insert_vals)})
                 ON CONFLICT (camera_id) DO UPDATE SET {update_clause}
-            """), params)
+                RETURNING state, pid, last_error, restart_count
+            """), params)).fetchone()
             await session.commit()
+
+        # Push to anyone with the camera's status-ws open (cameras.py) so the
+        # Settings UI updates live instead of only on its initial fetch.
+        redis = await get_redis()
+        await redis.publish(f"camera:{camera_id}:process_status", json.dumps({
+            "state": row.state, "pid": row.pid,
+            "last_error": row.last_error, "restart_count": row.restart_count,
+        }))
