@@ -1,52 +1,36 @@
-import { useEffect, useState } from 'react'
-import { getToken } from './api/client'
-import { AdvancedModeProvider, AdvancedToggle } from './components/AdvancedToggle'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { AdvancedModeProvider } from './components/AdvancedToggle'
+import { AppShell } from './AppShell'
+import { RequireAuth } from './RequireAuth'
+import { LoginPage } from './pages/LoginPage'
+import { DashboardPage } from './pages/DashboardPage'
+import { ZonesPage } from './pages/ZonesPage'
+import { CandidatesPage } from './pages/CandidatesPage'
+import { AlertsPage } from './pages/AlertsPage'
 import { CamerasPage } from './pages/CamerasPage'
 import { HardwarePage } from './pages/HardwarePage'
 import { SystemPage } from './pages/SystemPage'
 
-type Tab = 'cameras' | 'hardware' | 'system'
-
 function App() {
-  const [tab, setTab] = useState<Tab>('cameras')
-  const hasToken = getToken() !== null
-
-  useEffect(() => {
-    if (!hasToken) {
-      window.location.href = '/dashboard/'
-    }
-  }, [hasToken])
-
-  if (!hasToken) {
-    return <div className="empty">Redirecting to login…</div>
-  }
-
   return (
-    <AdvancedModeProvider>
-      <header className="settings-header">
-        <h1>Third-Eye Settings</h1>
-        <nav className="tabs">
-          <button className={tab === 'cameras' ? 'active' : ''} onClick={() => setTab('cameras')}>
-            Cameras
-          </button>
-          <button className={tab === 'hardware' ? 'active' : ''} onClick={() => setTab('hardware')}>
-            Hardware
-          </button>
-          <button className={tab === 'system' ? 'active' : ''} onClick={() => setTab('system')}>
-            System
-          </button>
-        </nav>
-        <AdvancedToggle />
-        <a href="/dashboard/" className="dashboard-link">
-          Dashboard
-        </a>
-      </header>
-      <main className="settings-main">
-        {tab === 'cameras' && <CamerasPage />}
-        {tab === 'hardware' && <HardwarePage />}
-        {tab === 'system' && <SystemPage />}
-      </main>
-    </AdvancedModeProvider>
+    <BrowserRouter basename="/settings">
+      <AdvancedModeProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route element={<RequireAuth />}>
+            <Route element={<AppShell />}>
+              <Route path="/" element={<DashboardPage />} />
+              <Route path="/zones" element={<ZonesPage />} />
+              <Route path="/candidates" element={<CandidatesPage />} />
+              <Route path="/alerts" element={<AlertsPage />} />
+              <Route path="/cameras" element={<CamerasPage />} />
+              <Route path="/hardware" element={<HardwarePage />} />
+              <Route path="/system" element={<SystemPage />} />
+            </Route>
+          </Route>
+        </Routes>
+      </AdvancedModeProvider>
+    </BrowserRouter>
   )
 }
 

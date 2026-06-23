@@ -89,8 +89,8 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
     },
   })
   if (res.status === 401) {
-    // No second login UI here - the dashboard's is already battle-tested.
-    window.location.href = '/dashboard/'
+    sessionStorage.removeItem('te_token')
+    window.location.href = '/settings/login'
     throw new Error('Unauthorized')
   }
   if (!res.ok) {

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import make_asgi_app
 
@@ -73,9 +73,24 @@ if _DASHBOARD_DIR.is_dir():
 
 # ── Settings app (React+Vite build output; reads the same sessionStorage
 # token the dashboard writes, no separate login) ──────────────────────────────
+# Not a plain StaticFiles mount: this is a client-side-routed SPA (react-
+# router, basename="/settings"), so a direct load/refresh of e.g.
+# /settings/zones must still serve index.html and let the router take
+# over - StaticFiles(html=True) only does that fallback for the exact
+# mount root, not arbitrary sub-paths, which 404'd on every route but "/"
+# until this was added.
 _SETTINGS_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "settings" / "dist"
 if _SETTINGS_DIR.is_dir():
-    app.mount("/settings", StaticFiles(directory=str(_SETTINGS_DIR), html=True), name="settings")
+    @app.get("/settings")
+    async def redirect_settings_root() -> RedirectResponse:
+        return RedirectResponse(url="/settings/")
+
+    @app.get("/settings/{full_path:path}")
+    async def serve_settings_spa(full_path: str) -> FileResponse:
+        candidate = _SETTINGS_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_SETTINGS_DIR / "index.html")
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 
