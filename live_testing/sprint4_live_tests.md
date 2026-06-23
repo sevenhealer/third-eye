@@ -76,6 +76,16 @@ live). At least one identity enrolled. Infra containers healthy
   `data/logs/<camera_id>.log` for why the process actually died (bad
   RTSP credentials, wrong GPU index, OOM) — the supervisor backs off
   retries after repeat failures, it doesn't hide them.
+- **A camera tile, the live-view modal, or the alert feed just stops
+  updating after a while with no error visible** → was a real bug,
+  fixed (2026-06-23): all three (and the new camera status-ws) consumed
+  Redis pub/sub via `async for message in pubsub.listen()`, which
+  blocks indefinitely on the connection's read and silently raised
+  `redis.exceptions.TimeoutError` whenever nothing was published for a
+  stretch — alerts.py's alert feed was the most exposed, since alerts
+  are rare by nature. All four now use `pubsub.get_message(timeout=20.0)`
+  instead, which just returns `None` on a quiet period. If this
+  resurfaces, it's a regression of this exact fix, not a new bug.
 
 ### 🟡 DEFERRED — accept for now (NOT failures; later sprints)
 
