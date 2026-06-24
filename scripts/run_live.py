@@ -297,15 +297,30 @@ async def main() -> None:
 
     # Auto-collection: save good-view face crops auto-labelled by the gate's
     # verdict for CDCN++ training. Needs the liveness checker to label them.
+    # Bounded on two axes so it can't grow without limit: a per-LABEL cap keeps
+    # disk in check, and a per-TRACK cap stops a single persistent object (e.g.
+    # a static statue, which would otherwise emit one near-identical spoof crop
+    # every second forever) from dominating the dataset.
     collect_dirs: dict[str, Path] = {}
     last_collect: dict[int, int] = {}   # track_id -> last frame a crop was saved
+    collect_per_track: dict[int, int] = {}  # track_id -> crops saved this run
+    collect_per_label: dict[str, int] = {}  # label -> total crops in its folder
+    last_saved_gray: dict[int, object] = {}  # track_id -> last saved crop (small gray)
     COLLECT_EVERY = 15                  # ~1 crop/sec/track at 15fps, avoid flooding
+    MAX_PER_TRACK = 40                  # one object/person can't flood the set
+    MAX_PER_LABEL = 400                 # hard disk/balance cap per label
+    # A static object yields near-identical crops; only keep one that differs
+    # enough from the last saved for its track (mean abs gray diff, 0-255).
+    DEDUP_MIN_DIFF = 8.0
     if args.collect_antispoofing and liveness is not None:
         for lbl in ("live", "spoof"):
             d = ROOT / "data" / "antispoofing" / lbl
             d.mkdir(parents=True, exist_ok=True)
             collect_dirs[lbl] = d
-        print(f"Anti-spoofing collection: ON → {ROOT / 'data' / 'antispoofing'}")
+            collect_per_label[lbl] = len(list(d.glob("*.jpg")))  # count what's already there
+        print(f"Anti-spoofing collection: ON → {ROOT / 'data' / 'antispoofing'} "
+              f"(caps: {MAX_PER_LABEL}/label, {MAX_PER_TRACK}/track; "
+              f"have live={collect_per_label['live']} spoof={collect_per_label['spoof']})")
     elif args.collect_antispoofing:
         print("Anti-spoofing collection requested but liveness is bypassed — disabled.")
 
@@ -644,10 +659,28 @@ async def main() -> None:
                         and short_px >= 32
                         and frame_count - last_collect.get(t.track_id, -999) >= COLLECT_EVERY):
                     lbl = "live" if is_live else "spoof"
-                    fname = (collect_dirs[lbl]
-                             / f"{args.camera_id}_{frame_count:07d}_t{t.track_id}.jpg")
-                    cv2.imwrite(str(fname), raw_crop)
-                    last_collect[t.track_id] = frame_count
+                    # Near-duplicate skip: a static object yields the same crop
+                    # every tick; only keep one that differs from the last saved.
+                    small_gray = cv2.cvtColor(cv2.resize(raw_crop, (64, 64)),
+                                              cv2.COLOR_BGR2GRAY)
+                    prev_gray = last_saved_gray.get(t.track_id)
+                    too_similar = (
+                        prev_gray is not None
+                        and cv2.mean(cv2.absdiff(small_gray, prev_gray))[0] < DEDUP_MIN_DIFF
+                    )
+                    if (not too_similar
+                            and collect_per_label.get(lbl, 0) < MAX_PER_LABEL
+                            and collect_per_track.get(t.track_id, 0) < MAX_PER_TRACK):
+                        fname = (collect_dirs[lbl]
+                                 / f"{args.camera_id}_{frame_count:07d}_t{t.track_id}.jpg")
+                        cv2.imwrite(str(fname), raw_crop)
+                        last_collect[t.track_id] = frame_count
+                        last_saved_gray[t.track_id] = small_gray
+                        collect_per_track[t.track_id] = collect_per_track.get(t.track_id, 0) + 1
+                        collect_per_label[lbl] = collect_per_label.get(lbl, 0) + 1
+                        if collect_per_label[lbl] == MAX_PER_LABEL:
+                            print(f"  [collect] '{lbl}' reached cap {MAX_PER_LABEL} — "
+                                  f"no more '{lbl}' crops will be saved this run")
 
             # a return-from-gap could be a different person on the same ID —
             # flag the track and re-verify immediately
@@ -928,6 +961,8 @@ async def main() -> None:
                 liveness.clear(str(stale))
                 live_state.pop(stale, None)
                 last_collect.pop(stale, None)
+                collect_per_track.pop(stale, None)
+                last_saved_gray.pop(stale, None)
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
