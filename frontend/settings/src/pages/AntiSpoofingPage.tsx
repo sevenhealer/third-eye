@@ -22,6 +22,7 @@ import {
   listCheckpoints,
   saveCheckpoint,
   activateCheckpoint,
+  deactivateCheckpoint,
   deleteCheckpoint,
 } from '../api/client'
 import { usePolling } from '../api/usePolling'
@@ -165,16 +166,22 @@ export function AntiSpoofingPage() {
     }
   }
 
-  const onRestoreSnapshot = async (s: Snapshot) => {
+  const onRestoreSnapshot = async (s: Snapshot, mode: 'replace' | 'merge') => {
     const ok = await confirm({
-      title: `Restore “${s.name}”?`,
-      message: `This REPLACES the working dataset (live=${data?.live ?? 0}, spoof=${data?.spoof ?? 0}) with the snapshot (live=${s.live}, spoof=${s.spoof}). Current crops are cleared first.`,
-      confirmLabel: 'Restore',
+      title: mode === 'merge' ? `Merge “${s.name}”?` : `Restore “${s.name}”?`,
+      message:
+        mode === 'merge'
+          ? `Appends the snapshot (live=${s.live}, spoof=${s.spoof}) to the current working set (live=${data?.live ?? 0}, spoof=${data?.spoof ?? 0}). Nothing is cleared.`
+          : `REPLACES the working set (live=${data?.live ?? 0}, spoof=${data?.spoof ?? 0}) with the snapshot (live=${s.live}, spoof=${s.spoof}). Current crops are cleared first.`,
+      confirmLabel: mode === 'merge' ? 'Merge' : 'Restore',
     })
     if (!ok) return
     try {
-      const res = await restoreSnapshot(s.name)
-      toast(`Restored ${res.restored} crop(s) from “${s.name}”`, 'success')
+      const res = await restoreSnapshot(s.name, mode)
+      toast(
+        `${mode === 'merge' ? 'Merged' : 'Restored'} ${res.restored} crop(s) from “${s.name}”`,
+        'success',
+      )
       refresh()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Restore failed', 'error')
@@ -212,16 +219,26 @@ export function AntiSpoofingPage() {
   const onActivateCheckpoint = async (c: Checkpoint) => {
     const ok = await confirm({
       title: `Activate “${c.name}”?`,
-      message: `Makes this the live model${c.val_acc != null ? ` (val_acc ${c.val_acc.toFixed(3)})` : ''}. Restart the camera(s) afterwards to load it.`,
+      message: `Adds this to the live model set${c.val_acc != null ? ` (val_acc ${c.val_acc.toFixed(3)})` : ''}. With more than one active they run as an ensemble. Restart the camera(s) to load the change.`,
       confirmLabel: 'Activate',
     })
     if (!ok) return
     try {
       const res = await activateCheckpoint(c.name)
-      toast(res.note || 'Checkpoint activated', 'success')
+      toast(res.note || 'Activated', 'success')
       refresh()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Activate failed', 'error')
+    }
+  }
+
+  const onDeactivateCheckpoint = async (c: Checkpoint) => {
+    try {
+      const res = await deactivateCheckpoint(c.name)
+      toast(res.note || 'Deactivated', 'success')
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Deactivate failed', 'error')
     }
   }
 
@@ -353,7 +370,9 @@ export function AntiSpoofingPage() {
           </div>
           <p className="hint">
             Save the current labelled set, then Clear all and collect a fresh one.
-            Restore a snapshot to train on it again.
+            <strong> Restore</strong> replaces the working set; <strong>Merge</strong>{' '}
+            appends a snapshot, so you can combine several into one dataset and
+            train once.
           </p>
           {snapshots.length === 0 ? (
             <div className="empty">No snapshots yet.</div>
@@ -365,7 +384,8 @@ export function AntiSpoofingPage() {
                   <span className="as-list-meta">
                     live {s.live} · spoof {s.spoof}
                   </span>
-                  <button onClick={() => onRestoreSnapshot(s)}>Restore</button>
+                  <button onClick={() => onRestoreSnapshot(s, 'replace')}>Restore</button>
+                  <button onClick={() => onRestoreSnapshot(s, 'merge')}>Merge</button>
                   <button className="link-button as-del" onClick={() => onDeleteSnapshot(s)}>
                     ✕
                   </button>
@@ -391,8 +411,10 @@ export function AntiSpoofingPage() {
             </div>
           </div>
           <p className="hint">
-            Training overwrites the active model from scratch (the previous one is
-            auto-archived). Re-activate an older one if a retrain came out worse.
+            Activate one or more checkpoints — several active run as an{' '}
+            <strong>ensemble</strong> (scores combined). Training builds a fresh
+            model and auto-archives the previous one. Changes load on the next
+            camera restart.
           </p>
           {checkpoints.length === 0 ? (
             <div className="empty">No model yet — train one first.</div>
@@ -410,6 +432,9 @@ export function AntiSpoofingPage() {
                   </span>
                   {!c.name.startsWith('(') && !c.active && (
                     <button onClick={() => onActivateCheckpoint(c)}>Activate</button>
+                  )}
+                  {!c.name.startsWith('(') && c.active && (
+                    <button onClick={() => onDeactivateCheckpoint(c)}>Deactivate</button>
                   )}
                   {!c.name.startsWith('(') && (
                     <button className="link-button as-del" onClick={() => onDeleteCheckpoint(c)}>

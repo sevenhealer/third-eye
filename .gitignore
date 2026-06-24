@@ -59,6 +59,7 @@ data/antispoofing/
 data/antispoofing_snapshots/
 models/weights/cdcn_checkpoints/
 models/weights/cdcn_pp.json
+models/weights/cdcn_active.json
 
 # Data (track with DVC)
 data/raw/

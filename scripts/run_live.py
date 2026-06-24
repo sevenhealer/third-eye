@@ -27,6 +27,7 @@ Usage:
 """
 import argparse
 import asyncio
+import json
 import os
 import platform
 import signal
@@ -313,7 +314,8 @@ async def main() -> None:
     # temporal signal is confounded by crop size/noise and can't block — it
     # stays observe-only). When a trained checkpoint exists it auto-loads here
     # and drives both enforcement and the auto-collection labels.
-    cdcn = None
+    cdcn_models: list = []      # active liveness model(s); >1 → ensemble
+    cdcn_combine = "mean"       # ensemble combiner: "mean" (gentler) or "min" (stricter)
     cdcn_ema: dict[int, float] = {}         # track_id -> asymmetric-EMA live prob [0,1]
     cdcn_live: dict[int, bool] = {}         # track_id -> current verdict (hysteresis)
     cdcn_spoof_latch: dict[int, bool] = {}  # track_id -> hard-latched once clearly spoof
@@ -328,15 +330,42 @@ async def main() -> None:
     CDCN_STRONG_SPOOF = 0.30   # EMA <= this hard-latches spoof for the track's life
     CDCN_EVERY = 3             # run the net every Nth frame (EMA carries it; cuts feed lag)
     if not args.bypass_antispoofing:
-        cdcn_path = ROOT / "models" / "weights" / "cdcn_pp.pt"
-        if cdcn_path.exists():
+        from src.antispoofing.ensemble import CDCNWrapper
+        cdcn_device = "cpu" if args.cpu else "cuda"
+        weights_dir = ROOT / "models" / "weights"
+        # An active SET (ensemble) when configured on the Anti-Spoofing page,
+        # else the single signed cdcn_pp.pt. Set members load unsigned for now.
+        active_paths: list[Path] = []
+        active_file = weights_dir / "cdcn_active.json"
+        if active_file.exists():
             try:
-                from src.antispoofing.ensemble import CDCNWrapper
-                cdcn_device = "cpu" if args.cpu else "cuda"
-                cdcn = CDCNWrapper.load_from_checkpoint(str(cdcn_path), device=cdcn_device)
-                print(f"CDCN++ liveness model loaded ({cdcn_device}) — enforcement uses CDCN++")
+                cfg = json.loads(active_file.read_text())
+                cdcn_combine = cfg.get("combine", cdcn_combine)
+                for nm in cfg.get("models", []):
+                    p = weights_dir / "cdcn_checkpoints" / f"{nm}.pt"
+                    if p.exists():
+                        active_paths.append(p)
             except Exception as exc:
-                print(f"CDCN++ load failed ({exc}) — temporal observe-only")
+                print(f"active-set read failed ({exc}) — falling back to cdcn_pp.pt")
+        if not active_paths and (weights_dir / "cdcn_pp.pt").exists():
+            active_paths = [weights_dir / "cdcn_pp.pt"]
+        for p in active_paths:
+            try:
+                cdcn_models.append(
+                    CDCNWrapper.load_from_checkpoint(str(p), device=cdcn_device))
+            except Exception as exc:
+                print(f"CDCN++ load failed for {p.name} ({exc})")
+        if cdcn_models:
+            how = (f"ensemble of {len(cdcn_models)} ({cdcn_combine})"
+                   if len(cdcn_models) > 1 else "single model")
+            print(f"CDCN++ liveness loaded ({cdcn_device}) — {how}")
+        else:
+            print("No CDCN++ model available — temporal observe-only")
+
+    def _cdcn_score(crop) -> float:
+        """Combined live-probability across the active model(s)."""
+        scores = [m.score(crop) for m in cdcn_models]
+        return min(scores) if cdcn_combine == "min" else sum(scores) / len(scores)
 
     # live_state: track_id -> (is_live, score, decided, can_block). can_block is
     # True only when CDCN++ is the verdict source — the temporal gate never blocks.
@@ -711,10 +740,10 @@ async def main() -> None:
                 # carries it between), then turned into a verdict with spoof-
                 # biased hysteresis + a hard spoof latch, so a photo can't drift
                 # back to "real" once it has been caught.
-                if cdcn is not None and raw_crop.size:
+                if cdcn_models and raw_crop.size:
                     tk = t.track_id
                     if tk not in cdcn_last_score or frame_count % CDCN_EVERY == 0:
-                        cdcn_last_score[tk] = cdcn.score(raw_crop)
+                        cdcn_last_score[tk] = _cdcn_score(raw_crop)
                     s = cdcn_last_score[tk]
                     prev = cdcn_ema.get(tk)
                     if prev is None:

@@ -317,9 +317,9 @@ export const saveSnapshot = (name: string) =>
     method: 'POST',
     body: JSON.stringify({ name }),
   })
-export const restoreSnapshot = (name: string) =>
-  apiFetch<{ name: string; restored: number }>(
-    `/api/v1/antispoofing/snapshots/${encodeURIComponent(name)}/restore`,
+export const restoreSnapshot = (name: string, mode: 'replace' | 'merge' = 'replace') =>
+  apiFetch<{ name: string; restored: number; mode: string }>(
+    `/api/v1/antispoofing/snapshots/${encodeURIComponent(name)}/restore?mode=${mode}`,
     { method: 'POST' },
   )
 export const deleteSnapshot = (name: string) =>
@@ -343,8 +343,13 @@ export const saveCheckpoint = (name: string) =>
     body: JSON.stringify({ name }),
   })
 export const activateCheckpoint = (name: string) =>
-  apiFetch<{ name: string; active: boolean; note: string }>(
+  apiFetch<{ name: string; active: string[]; note: string }>(
     `/api/v1/antispoofing/checkpoints/${encodeURIComponent(name)}/activate`,
+    { method: 'POST' },
+  )
+export const deactivateCheckpoint = (name: string) =>
+  apiFetch<{ name: string; active: string[]; note: string }>(
+    `/api/v1/antispoofing/checkpoints/${encodeURIComponent(name)}/deactivate`,
     { method: 'POST' },
   )
 export const deleteCheckpoint = (name: string) =>

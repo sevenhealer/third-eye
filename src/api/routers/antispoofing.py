@@ -30,6 +30,7 @@ SNAPSHOTS_DIR = ROOT / "data" / "antispoofing_snapshots"
 CKPT_DIR = ROOT / "models" / "weights" / "cdcn_checkpoints"
 ACTIVE_CKPT = ROOT / "models" / "weights" / "cdcn_pp.pt"
 ACTIVE_META = ROOT / "models" / "weights" / "cdcn_pp.json"
+ACTIVE_SET = ROOT / "models" / "weights" / "cdcn_active.json"
 
 LABELS = ("live", "spoof")
 # Crops are written by run_live as <camera>_<frame>_t<track>.jpg — a safe,
@@ -76,6 +77,18 @@ def _read_meta(json_path: Path) -> dict:
 
 def _count_jpgs(d: Path) -> int:
     return len(list(d.glob("*.jpg"))) if d.is_dir() else 0
+
+
+def _active_names() -> list[str]:
+    """The checkpoint names in the live active set (ensemble when >1)."""
+    return list(_read_meta(ACTIVE_SET).get("models", []))
+
+
+def _save_active(names: list[str]) -> None:
+    cur = _read_meta(ACTIVE_SET)
+    ACTIVE_SET.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_SET.write_text(json.dumps(
+        {"models": names, "combine": cur.get("combine", "mean")}))
 
 
 class DatasetItem(BaseModel):
@@ -370,27 +383,34 @@ async def save_snapshot(body: NameBody, current_user: ActiveUser) -> Snapshot:
 
 
 @router.post("/snapshots/{name}/restore")
-async def restore_snapshot(name: str, current_user: ActiveUser) -> dict:
-    """Replace the working dataset with a snapshot (clears the current crops
-    first, then copies the snapshot's in)."""
+async def restore_snapshot(name: str, current_user: ActiveUser,
+                           mode: str = "replace") -> dict:
+    """Load a snapshot into the working dataset. ``mode=replace`` clears the
+    current crops first; ``mode=merge`` appends them (snapshot-prefixed names so
+    they can't clash), letting several snapshots be combined into one dataset."""
     current_user.require_role("admin")
     name = _safe_slug(name)
     src = SNAPSHOTS_DIR / name
     if not src.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Snapshot not found.")
+    merge = mode == "merge"
     restored = 0
     for lbl in LABELS:
         wd = DATASET_DIR / lbl
         wd.mkdir(parents=True, exist_ok=True)
-        for f in wd.glob("*.jpg"):
-            f.unlink()
+        if not merge:
+            for f in wd.glob("*.jpg"):
+                f.unlink()
         sd = src / lbl
         if sd.is_dir():
             for f in sd.glob("*.jpg"):
-                shutil.copy2(f, wd / f.name)
+                dst = wd / (f"{name}__{f.name}" if merge else f.name)
+                if merge and dst.exists():
+                    continue
+                shutil.copy2(f, dst)
                 restored += 1
-    logger.info("antispoofing_snapshot_restored", name=name, restored=restored)
-    return {"name": name, "restored": restored}
+    logger.info("antispoofing_snapshot_restored", name=name, mode=mode, restored=restored)
+    return {"name": name, "restored": restored, "mode": mode}
 
 
 @router.delete("/snapshots/{name}")
@@ -419,23 +439,27 @@ async def list_checkpoints(current_user: ActiveUser) -> list[Checkpoint]:
     """The active model plus every saved checkpoint, newest first. ``active``
     marks whichever archived file currently matches cdcn_pp.pt by content."""
     current_user.require_role("admin")
-    active_sha = _sha256(ACTIVE_CKPT) if ACTIVE_CKPT.is_file() else None
+    active_set = _active_names()
+    # Single-model mode (empty set): active = whichever file matches cdcn_pp.pt
+    # by content. Ensemble mode: active = membership in the set.
+    active_sha = (_sha256(ACTIVE_CKPT)
+                  if (not active_set and ACTIVE_CKPT.is_file()) else None)
     saved: list[Checkpoint] = []
     active_is_saved = False
     if CKPT_DIR.is_dir():
         for pt in sorted(CKPT_DIR.glob("*.pt"),
                          key=lambda p: p.stat().st_mtime, reverse=True):
             m = _read_meta(pt.with_suffix(".json"))
-            is_active = active_sha is not None and _sha256(pt) == active_sha
+            is_active = (pt.stem in active_set if active_set
+                         else active_sha is not None and _sha256(pt) == active_sha)
             active_is_saved = active_is_saved or is_active
             saved.append(Checkpoint(
                 name=pt.stem, val_acc=m.get("val_acc"), epoch=m.get("epoch"),
                 created=m.get("created"), source=m.get("source"), active=is_active))
     out: list[Checkpoint] = []
-    # Only show the synthetic active row when the live model isn't already one of
-    # the saved checkpoints — otherwise that saved one carries the active badge
-    # and we'd show two "active" rows for the same bytes.
-    if ACTIVE_CKPT.is_file() and not active_is_saved:
+    # Synthetic active row only in single-model mode, when the live model isn't
+    # itself a saved checkpoint (otherwise the saved one carries the badge).
+    if not active_set and ACTIVE_CKPT.is_file() and not active_is_saved:
         m = _read_meta(ACTIVE_META)
         out.append(Checkpoint(name="(active, unsaved)", val_acc=m.get("val_acc"),
                               epoch=m.get("epoch"), created=m.get("created"),
@@ -469,39 +493,41 @@ async def save_checkpoint(body: NameBody, current_user: ActiveUser) -> Checkpoin
 
 @router.post("/checkpoints/{name}/activate")
 async def activate_checkpoint(name: str, current_user: ActiveUser) -> dict:
-    """Make a saved checkpoint the active model (cdcn_pp.pt) and re-sign it.
-    Cameras load it on their next restart."""
+    """Add a saved checkpoint to the live active set (it becomes an ensemble
+    when more than one is active). Cameras load the change on next restart."""
     current_user.require_role("admin")
     name = _safe_slug(name)
-    src = CKPT_DIR / f"{name}.pt"
-    if not src.is_file():
+    if not (CKPT_DIR / f"{name}.pt").is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkpoint not found.")
-    shutil.copy2(src, ACTIVE_CKPT)
-    sidecar = src.with_suffix(".json")
-    if sidecar.is_file():
-        shutil.copy2(sidecar, ACTIVE_META)
-    # cdcn_pp.pt is a signed model (verify-on-startup, fail-closed) — swapping
-    # the bytes without re-signing would brick the next boot, so re-sign now.
-    try:
-        from src.core.model_registry import DEFAULT_MANIFEST_PATH, ModelRegistry
-        reg = ModelRegistry()
-        if DEFAULT_MANIFEST_PATH.exists():
-            reg.load_manifest(DEFAULT_MANIFEST_PATH)
-        reg.sign("cdcn_pp", ACTIVE_CKPT)
-        reg.save_manifest(DEFAULT_MANIFEST_PATH)
-    except Exception as exc:
-        logger.error("antispoofing_checkpoint_resign_failed", error=str(exc))
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            f"Activated, but re-signing failed: {exc}")
-    logger.info("antispoofing_checkpoint_activated", name=name)
-    return {"name": name, "active": True,
-            "note": "Restart the camera(s) to load the activated model."}
+    names = _active_names()
+    if name not in names:
+        names.append(name)
+        _save_active(names)
+    logger.info("antispoofing_checkpoint_activated", name=name, active=names)
+    return {"name": name, "active": names,
+            "note": "Restart the camera(s) to load the change."}
+
+
+@router.post("/checkpoints/{name}/deactivate")
+async def deactivate_checkpoint(name: str, current_user: ActiveUser) -> dict:
+    """Remove a checkpoint from the live active set. With the set empty the gate
+    falls back to the single signed cdcn_pp.pt."""
+    current_user.require_role("admin")
+    name = _safe_slug(name)
+    names = [n for n in _active_names() if n != name]
+    _save_active(names)
+    logger.info("antispoofing_checkpoint_deactivated", name=name, active=names)
+    return {"name": name, "active": names,
+            "note": "Restart the camera(s) to load the change."}
 
 
 @router.delete("/checkpoints/{name}")
 async def delete_checkpoint(name: str, current_user: ActiveUser) -> Response:
     current_user.require_role("admin")
     name = _safe_slug(name)
+    names = _active_names()
+    if name in names:  # never leave the set pointing at a deleted file
+        _save_active([n for n in names if n != name])
     pt = CKPT_DIR / f"{name}.pt"
     if pt.is_file():
         pt.unlink()
