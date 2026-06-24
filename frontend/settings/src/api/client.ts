@@ -277,6 +277,11 @@ export const relabelCrop = (label: string, filename: string, newLabel: string) =
   })
 export const deleteCrop = (label: string, filename: string) =>
   apiFetch(`/api/v1/antispoofing/crop/${label}/${filename}`, { method: 'DELETE' })
+export const clearDataset = (label?: 'live' | 'spoof') =>
+  apiFetch<{ label: string; deleted: number }>(
+    `/api/v1/antispoofing/dataset${label ? `?label=${label}` : ''}`,
+    { method: 'DELETE' },
+  )
 export const startTraining = (epochs: number) =>
   apiFetch<TrainStatus>('/api/v1/antispoofing/train', {
     method: 'POST',

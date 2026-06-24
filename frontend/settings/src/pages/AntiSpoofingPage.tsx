@@ -7,6 +7,7 @@ import {
   getAntiSpoofDataset,
   relabelCrop,
   deleteCrop,
+  clearDataset,
   startTraining,
   getTrainStatus,
   listCollection,
@@ -100,6 +101,23 @@ export function AntiSpoofingPage() {
     }
   }
 
+  const onClear = async (label?: 'live' | 'spoof') => {
+    const what = label ? `all ${label} crops` : 'the ENTIRE dataset'
+    const ok = await confirm({
+      title: `Delete ${what}?`,
+      message: `This permanently removes ${what}. This cannot be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
+    try {
+      const res = await clearDataset(label)
+      toast(`Deleted ${res.deleted} crop(s)`, 'success')
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Clear failed', 'error')
+    }
+  }
+
   const onTrain = async () => {
     const ok = await confirm({
       title: 'Train CDCN++ now?',
@@ -157,10 +175,20 @@ export function AntiSpoofingPage() {
         <div className="as-stat as-stat-live">
           <span className="as-stat-num">{data?.live ?? '—'}</span>
           <span className="as-stat-label">live crops</span>
+          {!!data?.live && (
+            <button className="link-button as-del" onClick={() => onClear('live')}>
+              clear
+            </button>
+          )}
         </div>
         <div className="as-stat as-stat-spoof">
           <span className="as-stat-num">{data?.spoof ?? '—'}</span>
           <span className="as-stat-label">spoof crops</span>
+          {!!data?.spoof && (
+            <button className="link-button as-del" onClick={() => onClear('spoof')}>
+              clear
+            </button>
+          )}
         </div>
         <div className="as-train-control">
           <label>
@@ -198,6 +226,17 @@ export function AntiSpoofingPage() {
           {train?.tail && train.tail.length > 0 && (
             <pre className="as-train-log">{train.tail.join('\n')}</pre>
           )}
+        </div>
+      )}
+
+      {!!(data && (data.live || data.spoof)) && (
+        <div className="as-grid-head">
+          <span className="hint">
+            Showing {data.items.length} most recent of {data.live + data.spoof} crop(s)
+          </span>
+          <button className="btn-danger" onClick={() => onClear()}>
+            Clear all
+          </button>
         </div>
       )}
 

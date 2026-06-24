@@ -119,6 +119,27 @@ async def delete_crop(label: str, filename: str, current_user: ActiveUser) -> Re
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.delete("/dataset")
+async def clear_dataset(current_user: ActiveUser, label: str | None = None) -> dict:
+    """Bulk-delete crops. ``label`` clears just that label (live/spoof);
+    omitting it wipes the whole dataset. Useful to discard a contaminated set
+    before re-collecting clean."""
+    current_user.require_role("admin")
+    targets = LABELS if label is None else (label,)
+    if label is not None and label not in LABELS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid label.")
+    deleted = 0
+    for lbl in targets:
+        d = DATASET_DIR / lbl
+        if not d.is_dir():
+            continue
+        for f in d.glob("*.jpg"):
+            f.unlink()
+            deleted += 1
+    logger.info("antispoofing_dataset_cleared", label=label or "all", deleted=deleted)
+    return {"label": label or "all", "deleted": deleted}
+
+
 class TrainStatus(BaseModel):
     running: bool
     latest_epoch: int | None

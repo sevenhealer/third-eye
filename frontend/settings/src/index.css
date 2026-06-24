@@ -532,3 +532,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 }
 .modal-actions { display: flex; align-items: center; gap: 12px; justify-content: flex-end; margin-top: 14px; }
 .modal-actions .hint { margin-right: auto; }
+
+.as-grid-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 8px; }
+.as-stat { position: relative; }
+.as-stat .as-del { position: absolute; top: 8px; right: 10px; font-size: 11px; }
