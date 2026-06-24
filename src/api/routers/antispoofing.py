@@ -82,6 +82,23 @@ def _save_active(names: list[str]) -> None:
         {"models": names, "combine": cur.get("combine", "mean")}))
 
 
+async def _reload_cameras(db: AsyncSession) -> int:
+    """Bump config_version on running cameras + kick the supervisor so they
+    respawn and pick up the new active model set (run_live reads it at startup).
+    Returns how many cameras were nudged."""
+    result = await db.execute(text(
+        "UPDATE cameras SET config_version = config_version + 1 "
+        "WHERE is_active = true AND desired_state = 'running'"
+    ))
+    await db.commit()
+    try:
+        redis = await get_redis()
+        await redis.publish(KICK_CHANNEL, "1")
+    except Exception as exc:
+        logger.warning("antispoofing_model_reload_kick_failed", error=str(exc))
+    return result.rowcount
+
+
 class DatasetItem(BaseModel):
     label: str
     filename: str
@@ -480,9 +497,11 @@ async def save_checkpoint(body: NameBody, current_user: ActiveUser) -> Checkpoin
 
 
 @router.post("/checkpoints/{name}/activate")
-async def activate_checkpoint(name: str, current_user: ActiveUser) -> dict:
+async def activate_checkpoint(
+    name: str, current_user: ActiveUser, db: AsyncSession = Depends(get_db)
+) -> dict:
     """Add a saved checkpoint to the live active set (it becomes an ensemble
-    when more than one is active). Cameras load the change on next restart."""
+    when more than one is active) and restart running cameras to load it."""
     current_user.require_role("admin")
     name = _safe_slug(name)
     if not (CKPT_DIR / f"{name}.pt").is_file():
@@ -491,22 +510,28 @@ async def activate_checkpoint(name: str, current_user: ActiveUser) -> dict:
     if name not in names:
         names.append(name)
         _save_active(names)
-    logger.info("antispoofing_checkpoint_activated", name=name, active=names)
+    restarted = await _reload_cameras(db)
+    logger.info("antispoofing_checkpoint_activated", name=name, active=names,
+                cameras=restarted)
     return {"name": name, "active": names,
-            "note": "Restart the camera(s) to load the change."}
+            "note": f"Active set updated — restarting {restarted} camera(s) to apply."}
 
 
 @router.post("/checkpoints/{name}/deactivate")
-async def deactivate_checkpoint(name: str, current_user: ActiveUser) -> dict:
-    """Remove a checkpoint from the live active set. With the set empty the gate
-    falls back to the single signed cdcn_pp.pt."""
+async def deactivate_checkpoint(
+    name: str, current_user: ActiveUser, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Remove a checkpoint from the live active set (empty set falls back to the
+    single signed cdcn_pp.pt) and restart running cameras to load it."""
     current_user.require_role("admin")
     name = _safe_slug(name)
     names = [n for n in _active_names() if n != name]
     _save_active(names)
-    logger.info("antispoofing_checkpoint_deactivated", name=name, active=names)
+    restarted = await _reload_cameras(db)
+    logger.info("antispoofing_checkpoint_deactivated", name=name, active=names,
+                cameras=restarted)
     return {"name": name, "active": names,
-            "note": "Restart the camera(s) to load the change."}
+            "note": f"Active set updated — restarting {restarted} camera(s) to apply."}
 
 
 @router.delete("/checkpoints/{name}")

@@ -219,7 +219,7 @@ export function AntiSpoofingPage() {
   const onActivateCheckpoint = async (c: Checkpoint) => {
     const ok = await confirm({
       title: `Activate “${c.name}”?`,
-      message: `Adds this to the live model set${c.val_acc != null ? ` (val_acc ${c.val_acc.toFixed(3)})` : ''}. With more than one active they run as an ensemble. Restart the camera(s) to load the change.`,
+      message: `Adds this to the live model set${c.val_acc != null ? ` (val_acc ${c.val_acc.toFixed(3)})` : ''}. With more than one active they run as an ensemble. Running cameras restart automatically to apply.`,
       confirmLabel: 'Activate',
     })
     if (!ok) return
