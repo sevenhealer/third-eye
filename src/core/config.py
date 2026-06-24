@@ -91,7 +91,9 @@ class Settings(BaseSettings):
     video_archive_retention_days: int = 30
 
     # ── Model registry ────────────────────────────────────────────────────────
-    model_manifest_path: Path = Path("/app/models/manifest.json")
+    # The manifest path is resolved repo-relatively in src.core.model_registry
+    # (DEFAULT_MANIFEST_PATH) so it works both natively and in the container —
+    # no hardcoded /app setting here, which used to break native startup_verify.
 
     # ── Encryption ────────────────────────────────────────────────────────────
     embedding_encryption_key: str = ""
