@@ -314,8 +314,19 @@ async def main() -> None:
     # stays observe-only). When a trained checkpoint exists it auto-loads here
     # and drives both enforcement and the auto-collection labels.
     cdcn = None
-    cdcn_ema: dict[int, float] = {}    # track_id -> smoothed CDCN live prob [0,1]
-    CDCN_LIVE_THRESHOLD = 0.5
+    cdcn_ema: dict[int, float] = {}         # track_id -> asymmetric-EMA live prob [0,1]
+    cdcn_live: dict[int, bool] = {}         # track_id -> current verdict (hysteresis)
+    cdcn_spoof_latch: dict[int, bool] = {}  # track_id -> hard-latched once clearly spoof
+    cdcn_last_score: dict[int, float] = {}  # track_id -> last raw score (scored every Nth frame)
+    # Hysteresis biased toward spoof. A held-up photo brought close/clean scores
+    # higher per-frame (its moiré/bezel cues vanish); a symmetric mean would let
+    # that cross 0.5 and "become real". So: react fast to spoof evidence, rise to
+    # live only slowly, require a STRONG real reading to clear a spoof, and hard-
+    # latch a track that ever reads clearly spoof (a real face never sustains it).
+    CDCN_SPOOF_ENTER = 0.45    # live -> spoof once EMA drops below this
+    CDCN_LIVE_EXIT = 0.75      # spoof -> live only once EMA climbs above this (sustained)
+    CDCN_STRONG_SPOOF = 0.30   # EMA <= this hard-latches spoof for the track's life
+    CDCN_EVERY = 3             # run the net every Nth frame (EMA carries it; cuts feed lag)
     if not args.bypass_antispoofing:
         cdcn_path = ROOT / "models" / "weights" / "cdcn_pp.pt"
         if cdcn_path.exists():
@@ -696,15 +707,38 @@ async def main() -> None:
                 is_live = (not decided) or live_score >= MOTION_THRESHOLD
 
                 # CDCN++ overrides as the verdict when loaded — it enforces and
-                # labels the collected crops. EMA-smoothed over frames for
-                # stability. live_score becomes the CDCN live probability.
+                # labels the collected crops. Scored every Nth frame (the EMA
+                # carries it between), then turned into a verdict with spoof-
+                # biased hysteresis + a hard spoof latch, so a photo can't drift
+                # back to "real" once it has been caught.
                 if cdcn is not None and raw_crop.size:
-                    s = cdcn.score(raw_crop)
-                    prev = cdcn_ema.get(t.track_id)
-                    live_score = s if prev is None else 0.6 * prev + 0.4 * s
-                    cdcn_ema[t.track_id] = live_score
+                    tk = t.track_id
+                    if tk not in cdcn_last_score or frame_count % CDCN_EVERY == 0:
+                        cdcn_last_score[tk] = cdcn.score(raw_crop)
+                    s = cdcn_last_score[tk]
+                    prev = cdcn_ema.get(tk)
+                    if prev is None:
+                        ema = s
+                    elif s < prev:
+                        ema = 0.5 * prev + 0.5 * s     # react fast to spoof evidence
+                    else:
+                        ema = 0.85 * prev + 0.15 * s   # rise to "live" only slowly
+                    cdcn_ema[tk] = ema
+                    live_score = ema
+                    if ema <= CDCN_STRONG_SPOOF:
+                        cdcn_spoof_latch[tk] = True
+                    if cdcn_spoof_latch.get(tk):
+                        is_live = False
+                    else:
+                        was_live = cdcn_live.get(tk, True)
+                        if was_live and ema < CDCN_SPOOF_ENTER:
+                            is_live = False
+                        elif not was_live and ema > CDCN_LIVE_EXIT:
+                            is_live = True
+                        else:
+                            is_live = was_live
+                    cdcn_live[tk] = is_live
                     decided = True
-                    is_live = live_score >= CDCN_LIVE_THRESHOLD
                     can_block = True
 
                 live_state[t.track_id] = (is_live, live_score, decided, can_block)
@@ -782,10 +816,19 @@ async def main() -> None:
             )
             if pid is not None:
                 claims.setdefault(pid, []).append(info["t"].track_id)
+        spoofy_tracks = {
+            tid for tid, lv in live_state.items()
+            if lv[3] and lv[2] and not lv[0]   # can_block and decided and not is_live
+        }
         for claimant_ids in claims.values():
             if len(claimant_ids) < 2:
                 continue
-            claimant_ids.sort(key=lambda tid: track_labels[tid][1], reverse=True)
+            # A live face beats a spoof for a contested identity: a clean, frontal
+            # held-up photo can out-score the real (often angled) person on
+            # similarity, which would hand the name to the spoof and demote the
+            # real person to unknown. Rank live-first, then by similarity.
+            claimant_ids.sort(
+                key=lambda tid: (1 if tid in spoofy_tracks else 0, -track_labels[tid][1]))
             keeper_id = claimant_ids[0]
             for loser_id in claimant_ids[1:]:
                 label, sim, _, _, _ = track_labels[loser_id]
@@ -881,8 +924,12 @@ async def main() -> None:
                 # logged as that person entering.
                 lv_live, _, lv_decided, lv_can_block = live_state.get(
                     t.track_id, (True, 1.0, False, False))
-                blocked = (args.enforce_liveness and lv_can_block
-                           and lv_decided and not lv_live)
+                # CDCN's spoof verdict, independent of the enforce toggle: a
+                # confirmed spoof must never become an enrollment candidate (it
+                # would pollute Pending Enrollments and could be merged into a
+                # real identity), even while only observing/collecting.
+                spoof_confirmed = lv_can_block and lv_decided and not lv_live
+                blocked = args.enforce_liveness and spoof_confirmed
                 if blocked:
                     label, pid = "unknown", None
                 if label in ("", "?", "unknown"):
@@ -898,9 +945,11 @@ async def main() -> None:
                 ))
                 bbox = t.bbox
                 short = float(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
-                # A blocked static presentation is never a good view — don't let
-                # a photo become an enrollment candidate.
-                good_view = (not blocked) and t.confidence >= args.det_thresh and short >= 32
+                # A spoof (or a blocked static presentation) is never a good
+                # enrollment view — never capture a photo as a candidate, even
+                # in observe mode (spoof_confirmed ignores the enforce toggle).
+                good_view = (not blocked) and (not spoof_confirmed) and \
+                    t.confidence >= args.det_thresh and short >= 32
                 # for an unknown good view, hand the capture a JPEG face crop so
                 # the candidate has a viewable photo (stored in MinIO)
                 crop_jpeg = None
@@ -1036,6 +1085,9 @@ async def main() -> None:
                 collect_per_track.pop(stale, None)
                 last_saved_gray.pop(stale, None)
                 cdcn_ema.pop(stale, None)
+                cdcn_live.pop(stale, None)
+                cdcn_spoof_latch.pop(stale, None)
+                cdcn_last_score.pop(stale, None)
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
