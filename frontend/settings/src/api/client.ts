@@ -247,6 +247,43 @@ export async function fetchCropBlobUrl(cropUrl: string): Promise<string | null> 
 export const listGpus = () => apiFetch<GpuStat[]>('/api/v1/hardware/gpus')
 export const getSystemStats = () => apiFetch<SystemStats>('/api/v1/hardware/system')
 
+// ── Anti-spoofing ──────────────────────────────────────────────────────────
+export interface AntiSpoofItem {
+  label: 'live' | 'spoof'
+  filename: string
+  url: string
+}
+export interface AntiSpoofDataset {
+  live: number
+  spoof: number
+  items: AntiSpoofItem[]
+}
+export interface TrainStatus {
+  running: boolean
+  latest_epoch: number | null
+  total_epochs: number | null
+  best_val_acc: number | null
+  finished: boolean
+  tail: string[]
+}
+
+export const getAntiSpoofDataset = () =>
+  apiFetch<AntiSpoofDataset>('/api/v1/antispoofing/dataset')
+export const relabelCrop = (label: string, filename: string, newLabel: string) =>
+  apiFetch('/api/v1/antispoofing/relabel', {
+    method: 'POST',
+    body: JSON.stringify({ label, filename, new_label: newLabel }),
+  })
+export const deleteCrop = (label: string, filename: string) =>
+  apiFetch(`/api/v1/antispoofing/crop/${label}/${filename}`, { method: 'DELETE' })
+export const startTraining = (epochs: number) =>
+  apiFetch<TrainStatus>('/api/v1/antispoofing/train', {
+    method: 'POST',
+    body: JSON.stringify({ epochs }),
+  })
+export const getTrainStatus = () =>
+  apiFetch<TrainStatus>('/api/v1/antispoofing/train/status')
+
 export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const token = getToken() || ''

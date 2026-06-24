@@ -146,6 +146,7 @@ async def health() -> dict:
 from src.api.routers import (  # noqa: E402
     admin,
     alerts,
+    antispoofing,
     auth,
     cameras,
     events,
@@ -166,3 +167,4 @@ app.include_router(admin.router,       prefix="/api/v1/admin",        tags=["adm
 app.include_router(hardware.router,    prefix="/api/v1/hardware",     tags=["hardware"])
 app.include_router(zones.router,       prefix="/api/v1/zones",        tags=["zones"])
 app.include_router(manual_enroll.router, prefix="/api/v1/manual-enroll", tags=["manual-enroll"])
+app.include_router(antispoofing.router, prefix="/api/v1/antispoofing", tags=["antispoofing"])

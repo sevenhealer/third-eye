@@ -50,6 +50,10 @@ models/manifest.json
 # binary image data, not source; track with DVC if needed, not git
 /datasets/
 
+# Auto-collected anti-spoofing crops (run_live --collect-antispoofing) — real
+# face images, label-organized; per-deployment training data, never source.
+data/antispoofing/
+
 # Data (track with DVC)
 data/raw/
 data/processed/

@@ -10,6 +10,7 @@ import { CandidatesPage } from './pages/CandidatesPage'
 import { EnrollPage } from './pages/EnrollPage'
 import { AlertsPage } from './pages/AlertsPage'
 import { CamerasPage } from './pages/CamerasPage'
+import { AntiSpoofingPage } from './pages/AntiSpoofingPage'
 import { HardwarePage } from './pages/HardwarePage'
 import { SystemPage } from './pages/SystemPage'
 
@@ -28,6 +29,7 @@ function App() {
                 <Route path="/enroll" element={<EnrollPage />} />
                 <Route path="/alerts" element={<AlertsPage />} />
                 <Route path="/cameras" element={<CamerasPage />} />
+                <Route path="/anti-spoofing" element={<AntiSpoofingPage />} />
                 <Route path="/hardware" element={<HardwarePage />} />
                 <Route path="/system" element={<SystemPage />} />
               </Route>

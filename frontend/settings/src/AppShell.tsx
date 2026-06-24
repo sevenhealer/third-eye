@@ -9,6 +9,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName }[] = [
   { to: '/enroll', label: 'Enroll', icon: 'enroll' },
   { to: '/alerts', label: 'Alerts', icon: 'alerts' },
   { to: '/cameras', label: 'Cameras', icon: 'cameras' },
+  { to: '/anti-spoofing', label: 'Anti-Spoofing', icon: 'shield' },
   { to: '/hardware', label: 'Hardware', icon: 'hardware' },
   { to: '/system', label: 'System', icon: 'system' },
 ]
