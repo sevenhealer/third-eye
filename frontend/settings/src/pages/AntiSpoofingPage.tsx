@@ -4,6 +4,8 @@ import {
   type AntiSpoofItem,
   type TrainStatus,
   type CollectionCamera,
+  type Snapshot,
+  type Checkpoint,
   getAntiSpoofDataset,
   relabelCrop,
   deleteCrop,
@@ -13,6 +15,14 @@ import {
   listCollection,
   setCollection,
   fetchCropBlobUrl,
+  listSnapshots,
+  saveSnapshot,
+  restoreSnapshot,
+  deleteSnapshot,
+  listCheckpoints,
+  saveCheckpoint,
+  activateCheckpoint,
+  deleteCheckpoint,
 } from '../api/client'
 import { usePolling } from '../api/usePolling'
 import { useFeedback } from '../components/feedbackContext'
@@ -50,17 +60,25 @@ export function AntiSpoofingPage() {
   const [cameras, setCameras] = useState<CollectionCamera[]>([])
   const [epochs, setEpochs] = useState(30)
   const [error, setError] = useState('')
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
+  const [snapName, setSnapName] = useState('')
+  const [ckptName, setCkptName] = useState('')
 
   const refresh = useCallback(async () => {
     try {
-      const [ds, ts, cams] = await Promise.all([
+      const [ds, ts, cams, snaps, ckpts] = await Promise.all([
         getAntiSpoofDataset(),
         getTrainStatus(),
         listCollection(),
+        listSnapshots(),
+        listCheckpoints(),
       ])
       setData(ds)
       setTrain(ts)
       setCameras(cams)
+      setSnapshots(snaps)
+      setCheckpoints(ckpts)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load anti-spoofing data.')
     }
@@ -128,9 +146,97 @@ export function AntiSpoofingPage() {
     try {
       const ts = await startTraining(epochs)
       setTrain(ts)
-      toast('Training started', 'success')
+      toast('Training started — the model you had is auto-archived first', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not start training', 'error')
+    }
+  }
+
+  const onSaveSnapshot = async () => {
+    const name = snapName.trim()
+    if (!name) return
+    try {
+      await saveSnapshot(name)
+      setSnapName('')
+      toast(`Snapshot “${name}” saved`, 'success')
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Snapshot failed', 'error')
+    }
+  }
+
+  const onRestoreSnapshot = async (s: Snapshot) => {
+    const ok = await confirm({
+      title: `Restore “${s.name}”?`,
+      message: `This REPLACES the working dataset (live=${data?.live ?? 0}, spoof=${data?.spoof ?? 0}) with the snapshot (live=${s.live}, spoof=${s.spoof}). Current crops are cleared first.`,
+      confirmLabel: 'Restore',
+    })
+    if (!ok) return
+    try {
+      const res = await restoreSnapshot(s.name)
+      toast(`Restored ${res.restored} crop(s) from “${s.name}”`, 'success')
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Restore failed', 'error')
+    }
+  }
+
+  const onDeleteSnapshot = async (s: Snapshot) => {
+    const ok = await confirm({
+      title: `Delete snapshot “${s.name}”?`,
+      message: 'Permanently removes the saved snapshot. The working dataset is untouched.',
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
+    try {
+      await deleteSnapshot(s.name)
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Delete failed', 'error')
+    }
+  }
+
+  const onSaveCheckpoint = async () => {
+    const name = ckptName.trim()
+    if (!name) return
+    try {
+      await saveCheckpoint(name)
+      setCkptName('')
+      toast(`Checkpoint “${name}” saved`, 'success')
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Save failed', 'error')
+    }
+  }
+
+  const onActivateCheckpoint = async (c: Checkpoint) => {
+    const ok = await confirm({
+      title: `Activate “${c.name}”?`,
+      message: `Makes this the live model${c.val_acc != null ? ` (val_acc ${c.val_acc.toFixed(3)})` : ''}. Restart the camera(s) afterwards to load it.`,
+      confirmLabel: 'Activate',
+    })
+    if (!ok) return
+    try {
+      const res = await activateCheckpoint(c.name)
+      toast(res.note || 'Checkpoint activated', 'success')
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Activate failed', 'error')
+    }
+  }
+
+  const onDeleteCheckpoint = async (c: Checkpoint) => {
+    const ok = await confirm({
+      title: `Delete checkpoint “${c.name}”?`,
+      message: 'Permanently removes the archived checkpoint.',
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
+    try {
+      await deleteCheckpoint(c.name)
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Delete failed', 'error')
     }
   }
 
@@ -228,6 +334,94 @@ export function AntiSpoofingPage() {
           )}
         </div>
       )}
+
+      <div className="as-manage">
+        <div className="as-panel">
+          <div className="as-panel-head">
+            <h3>Dataset snapshots</h3>
+            <div className="as-panel-add">
+              <input
+                placeholder="snapshot name"
+                value={snapName}
+                onChange={(e) => setSnapName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && onSaveSnapshot()}
+              />
+              <button className="btn-primary" onClick={onSaveSnapshot} disabled={!snapName.trim()}>
+                Save current
+              </button>
+            </div>
+          </div>
+          <p className="hint">
+            Save the current labelled set, then Clear all and collect a fresh one.
+            Restore a snapshot to train on it again.
+          </p>
+          {snapshots.length === 0 ? (
+            <div className="empty">No snapshots yet.</div>
+          ) : (
+            <ul className="as-list">
+              {snapshots.map((s) => (
+                <li key={s.name} className="as-list-row">
+                  <span className="as-list-name">{s.name}</span>
+                  <span className="as-list-meta">
+                    live {s.live} · spoof {s.spoof}
+                  </span>
+                  <button onClick={() => onRestoreSnapshot(s)}>Restore</button>
+                  <button className="link-button as-del" onClick={() => onDeleteSnapshot(s)}>
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="as-panel">
+          <div className="as-panel-head">
+            <h3>Model checkpoints</h3>
+            <div className="as-panel-add">
+              <input
+                placeholder="checkpoint name"
+                value={ckptName}
+                onChange={(e) => setCkptName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && onSaveCheckpoint()}
+              />
+              <button className="btn-primary" onClick={onSaveCheckpoint} disabled={!ckptName.trim()}>
+                Save active
+              </button>
+            </div>
+          </div>
+          <p className="hint">
+            Training overwrites the active model from scratch (the previous one is
+            auto-archived). Re-activate an older one if a retrain came out worse.
+          </p>
+          {checkpoints.length === 0 ? (
+            <div className="empty">No model yet — train one first.</div>
+          ) : (
+            <ul className="as-list">
+              {checkpoints.map((c) => (
+                <li key={c.name} className={`as-list-row${c.active ? ' as-active' : ''}`}>
+                  <span className="as-list-name">
+                    {c.name}
+                    {c.active && <span className="as-active-tag">active</span>}
+                  </span>
+                  <span className="as-list-meta">
+                    {c.val_acc != null ? `val_acc ${c.val_acc.toFixed(3)}` : 'acc —'}
+                    {c.epoch != null ? ` · ep ${c.epoch}` : ''}
+                  </span>
+                  {c.name !== '(active model)' && !c.active && (
+                    <button onClick={() => onActivateCheckpoint(c)}>Activate</button>
+                  )}
+                  {c.name !== '(active model)' && (
+                    <button className="link-button as-del" onClick={() => onDeleteCheckpoint(c)}>
+                      ✕
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
 
       {!!(data && (data.live || data.spoof)) && (
         <div className="as-grid-head">

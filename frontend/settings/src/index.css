@@ -512,6 +512,35 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 @keyframes as-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 .as-collection-cam button { padding: 5px 14px; font-size: 13px; }
 
+/* Dataset snapshots + model checkpoints management panels */
+.as-manage {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px; margin: 16px 0;
+}
+.as-panel {
+  padding: 14px 18px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.as-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.as-panel-head h3 { margin: 0; font-size: 15px; }
+.as-panel-add { display: flex; gap: 8px; }
+.as-panel-add input { width: 150px; padding: 5px 10px; font-size: 13px; }
+.as-panel-add button { padding: 5px 12px; font-size: 13px; }
+.as-panel .hint { margin: 6px 0 10px; }
+.as-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.as-list-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: var(--radius-sm); background: var(--surface-2, rgba(255,255,255,0.02));
+}
+.as-list-row.as-active { outline: 1px solid var(--success); }
+.as-list-name { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.as-active-tag {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--success); border: 1px solid var(--success); border-radius: 4px; padding: 1px 5px;
+}
+.as-list-meta { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+.as-list-row button { padding: 4px 10px; font-size: 12px; }
+
 /* Region-mask picker (draw ignore zones over the live feed) */
 .mask-canvas {
   position: relative; width: 100%; max-width: 720px; margin: 8px 0;

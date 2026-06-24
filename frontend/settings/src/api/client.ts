@@ -304,6 +304,54 @@ export const setCollection = (cameraId: string, enabled: boolean) =>
     body: JSON.stringify({ camera_id: cameraId, enabled }),
   })
 
+export interface Snapshot {
+  name: string
+  live: number
+  spoof: number
+  created: string | null
+}
+export const listSnapshots = () =>
+  apiFetch<Snapshot[]>('/api/v1/antispoofing/snapshots')
+export const saveSnapshot = (name: string) =>
+  apiFetch<Snapshot>('/api/v1/antispoofing/snapshots', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+export const restoreSnapshot = (name: string) =>
+  apiFetch<{ name: string; restored: number }>(
+    `/api/v1/antispoofing/snapshots/${encodeURIComponent(name)}/restore`,
+    { method: 'POST' },
+  )
+export const deleteSnapshot = (name: string) =>
+  apiFetch(`/api/v1/antispoofing/snapshots/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+
+export interface Checkpoint {
+  name: string
+  val_acc: number | null
+  epoch: number | null
+  created: string | null
+  source: string | null
+  active: boolean
+}
+export const listCheckpoints = () =>
+  apiFetch<Checkpoint[]>('/api/v1/antispoofing/checkpoints')
+export const saveCheckpoint = (name: string) =>
+  apiFetch<Checkpoint>('/api/v1/antispoofing/checkpoints', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+export const activateCheckpoint = (name: string) =>
+  apiFetch<{ name: string; active: boolean; note: string }>(
+    `/api/v1/antispoofing/checkpoints/${encodeURIComponent(name)}/activate`,
+    { method: 'POST' },
+  )
+export const deleteCheckpoint = (name: string) =>
+  apiFetch(`/api/v1/antispoofing/checkpoints/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+
 export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const token = getToken() || ''

@@ -54,6 +54,12 @@ models/manifest.json
 # face images, label-organized; per-deployment training data, never source.
 data/antispoofing/
 
+# Dataset snapshots + archived CDCN++ checkpoints saved from the Anti-Spoofing
+# page (and the active model's sidecar) — local artifacts, never source.
+data/antispoofing_snapshots/
+models/weights/cdcn_checkpoints/
+models/weights/cdcn_pp.json
+
 # Data (track with DVC)
 data/raw/
 data/processed/

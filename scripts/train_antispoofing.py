@@ -31,6 +31,7 @@ Collect broadly, or warm-start from a public CASIA-SURF/OULU checkpoint.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -188,6 +189,16 @@ def main() -> None:
                 },
                 output,
             )
+            # Sidecar metadata so the API can show/track this model's accuracy
+            # (and archive it under a name) without importing torch to read the
+            # checkpoint dict.
+            from datetime import datetime, timezone
+            output.with_suffix(".json").write_text(json.dumps({
+                "val_acc": round(float(val_acc), 4),
+                "epoch": epoch,
+                "created": datetime.now(timezone.utc).isoformat(),
+                "source": "train",
+            }))
             flag = "  ← saved (best)"
         print(f"epoch {epoch:>3}/{args.epochs}  train_loss={train_loss:.4f}  "
               f"val_acc={val_acc:.3f}{flag}")
