@@ -93,7 +93,16 @@ def parse_args() -> argparse.Namespace:
                         "with: nvidia-smi --query-gpu=index,name,"
                         "pcie.link.width.current --format=csv")
     p.add_argument("--bypass-antispoofing", action="store_true",
-                   help="Skip liveness check — DEV MODE ONLY")
+                   help="Disable the liveness check entirely (no scoring, no "
+                        "annotation) — DEV MODE ONLY")
+    p.add_argument("--enforce-liveness", action="store_true",
+                   help="HARD-BLOCK static presentations (photos/screens/"
+                        "statues): a track judged non-live is forced to "
+                        "'unknown', never recognized as an enrolled identity, "
+                        "never captured as an enrollment candidate. Without "
+                        "this flag liveness is still computed, drawn and logged "
+                        "(observe mode) but does not block — live-test the real "
+                        "vs spoof scores first, then turn enforcement on.")
     return p.parse_args()
 
 
@@ -241,10 +250,16 @@ async def main() -> None:
     print(f"  min face px     : {args.min_face}")
     print(f"  inference       : {inference_label}")
     print(f"  display window  : {'yes  (press q to quit)' if args.show else 'no'}")
-    # liveness runs in FacePipeline (layer 3), not in this detect+track
-    # script — statues, photos and screens WILL be boxed and tracked here
-    print(f"  anti-spoofing   : "
-          f"{'BYPASSED — dev mode' if args.bypass_antispoofing else 'n/a in this script (FacePipeline layer, later step)'}")
+    # Weight-free temporal liveness (micro-movement variance) runs per-track
+    # below. A printed photo / static screen / statue shows near-zero variance
+    # and scores as non-live.
+    if args.bypass_antispoofing:
+        antispoof_label = "BYPASSED — dev mode (no liveness scoring)"
+    elif args.enforce_liveness:
+        antispoof_label = "ENFORCED — static presentations blocked"
+    else:
+        antispoof_label = "observe-only (scored + drawn, not blocking; use --enforce-liveness)"
+    print(f"  anti-spoofing   : {antispoof_label}")
     print("=" * 62) 
     print("\nPress Ctrl+C to stop.\n")
 
@@ -262,6 +277,17 @@ async def main() -> None:
                           high_threshold=args.det_thresh,
                           low_threshold=det_floor,
                           appearance_threshold=args.reid_thresh)
+
+    # Weight-free liveness: per-track variance of the face crop's frame-to-frame
+    # luminance. A live face never holds perfectly still (blinks, micro-sway);
+    # a print/screen/statue does, so it scores near 0. Fed the FACE CROP (not
+    # the whole frame) so a moving background can't fake liveness. None when
+    # bypassed. live_state: track_id -> (is_live, score, decided).
+    from src.antispoofing.ensemble import AntiSpoofingEnsemble, TemporalConsistencyChecker
+    liveness = None if args.bypass_antispoofing else TemporalConsistencyChecker()
+    # Single source of truth for the live/static cutoff (shared with the ensemble).
+    liveness_threshold = AntiSpoofingEnsemble.TEMPORAL_LIVE_THRESHOLD
+    live_state: dict[int, tuple[bool, float, bool]] = {}
 
     # Layer 4 (recognition): track embedding -> pgvector gallery -> name.
     # Tracking IDs stay anonymous and session-local; the gallery lookup is
@@ -567,6 +593,24 @@ async def main() -> None:
             sustained = t.confidence < args.det_thresh
             short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
+            # Liveness: push this track's face crop and read its variance score.
+            # `decided` only becomes True once MINIMUM_FRAMES have accumulated —
+            # before that the track is treated as live (innocent until enough
+            # evidence) so a just-appeared real face is never blocked.
+            is_live, live_score, decided = True, 1.0, False
+            if liveness is not None:
+                tid = str(t.track_id)
+                x1, y1 = max(bbox[0], 0), max(bbox[1], 0)
+                x2, y2 = max(bbox[2], 0), max(bbox[3], 0)
+                crop = frame[y1:y2, x1:x2]
+                if crop.size:
+                    liveness.update(tid, crop)
+                live_score = liveness.score(tid)
+                buf = liveness._buffers.get(tid)
+                decided = buf is not None and len(buf) >= liveness.MINIMUM_FRAMES
+                is_live = (not decided) or live_score >= liveness_threshold
+                live_state[t.track_id] = (is_live, live_score, decided)
+
             # a return-from-gap could be a different person on the same ID —
             # flag the track and re-verify immediately
             if frames_gone > 3:
@@ -576,11 +620,18 @@ async def main() -> None:
                 force=frames_gone > 3,
                 good_view=(not sustained) and short_px >= 32,
             )
+            # Enforcement: a confirmed static presentation can't be an enrolled
+            # person — drop the name so it never recognizes or persists as one.
+            blocked = args.enforce_liveness and decided and not is_live
+            if blocked and name_txt:
+                name_txt = ""
             render_info.append({
                 "t": t, "bbox": bbox, "frames_gone": frames_gone,
                 "recently_back": recently_back, "back_gap": back_gap,
                 "sustained": sustained, "short_px": short_px,
                 "name_txt": name_txt,
+                "is_live": is_live, "live_score": live_score,
+                "decided": decided, "blocked": blocked,
             })
 
         # Same-frame identity collision: two DIFFERENT simultaneously-tracked
@@ -636,6 +687,11 @@ async def main() -> None:
                 console_extra += f"  BACK after {frames_gone} frames"
             if sustained:
                 console_extra += "  (low-conf sustain)"
+            if info.get("decided") and not info.get("is_live", True):
+                console_extra += (
+                    f"  STATIC?{'/BLOCKED' if info.get('blocked') else ''} "
+                    f"live={info.get('live_score', 0.0):.3f}"
+                )
             print(
                 f"[{meta.camera_id} | frame {meta.frame_id:>5}]  "
                 f"track={t.track_id:>3}  "
@@ -643,13 +699,21 @@ async def main() -> None:
                 f"conf={t.confidence:.3f}{console_extra}"
             )
             if args.show or stm is not None:
-                if recently_back:
+                static = info.get("decided") and not info.get("is_live", True)
+                if static:
+                    color = (0, 0, 255)      # red: static presentation (spoof?)
+                elif recently_back:
                     color = (0, 165, 255)    # orange: returned after a gap
                 elif sustained:
                     color = (0, 220, 220)    # yellow: alive on low-conf dets
                 else:
                     color = (0, 220, 0)      # green: normal high-conf track
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                if static:
+                    tag = "SPOOF — BLOCKED" if info.get("blocked") else "STATIC?"
+                    cv2.putText(frame, tag,
+                                (bbox[0], min(bbox[3] + 18, frame.shape[0] - 4)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
                 if name_txt:
                     cv2.putText(frame, name_txt,
                                 (bbox[0], max(bbox[1] - 46, 14)),
@@ -671,6 +735,13 @@ async def main() -> None:
                 label, sim, _, misses, pid = track_labels.get(
                     t.track_id, ("", 0.0, -999, 0, None)
                 )
+                # Enforced static presentation: present as unknown with no
+                # person_id, so a held-up photo of an enrolled person can't be
+                # logged as that person entering.
+                lv_live, _, lv_decided = live_state.get(t.track_id, (True, 1.0, False))
+                blocked = args.enforce_liveness and lv_decided and not lv_live
+                if blocked:
+                    label, pid = "unknown", None
                 if label in ("", "?", "unknown"):
                     state, name = "unknown", "unknown"
                 else:
@@ -684,7 +755,9 @@ async def main() -> None:
                 ))
                 bbox = t.bbox
                 short = float(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
-                good_view = t.confidence >= args.det_thresh and short >= 32
+                # A blocked static presentation is never a good view — don't let
+                # a photo become an enrollment candidate.
+                good_view = (not blocked) and t.confidence >= args.det_thresh and short >= 32
                 # for an unknown good view, hand the capture a JPEG face crop so
                 # the candidate has a viewable photo (stored in MinIO)
                 crop_jpeg = None
@@ -807,6 +880,15 @@ async def main() -> None:
                 import traceback
                 print(f"  ! event persistence error (frame continues): {exc}")
                 traceback.print_exc()
+
+        # Drop liveness state for tracks no longer present so the per-track
+        # buffers (and the stored prev-frame each holds) don't accumulate over a
+        # long session.
+        if liveness is not None and frame_count % 30 == 0:
+            active = {t.track_id for t in tracked}
+            for stale in [tid for tid in live_state if tid not in active]:
+                liveness.clear(str(stale))
+                live_state.pop(stale, None)
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
