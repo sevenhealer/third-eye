@@ -68,17 +68,13 @@ app.mount("/stream", StaticFiles(directory=str(_SNAPSHOTS_DIR)), name="stream")
 
 # ── Operator dashboard — retired in favor of the React Settings app's
 # Dashboard page (same camera grid/zones/candidates/alerts, now with real
-# routing). /dashboard redirects to the new app; the original vanilla
-# version stays reachable at /dashboard-legacy as a manual rollback path
-# for a burn-in period, not deleted outright. ─────────────────────────
-_DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "dashboard"
-if _DASHBOARD_DIR.is_dir():
-    app.mount("/dashboard-legacy", StaticFiles(directory=str(_DASHBOARD_DIR), html=True), name="dashboard-legacy")
-
-    @app.get("/dashboard")
-    @app.get("/dashboard/")
-    async def redirect_dashboard_to_settings() -> RedirectResponse:
-        return RedirectResponse(url="/settings/")
+# routing). The vanilla version has been removed after its burn-in period;
+# /dashboard now just redirects to the new app so old bookmarks/links keep
+# working. ─────────────────────────────────────────────────────────────
+@app.get("/dashboard")
+@app.get("/dashboard/")
+async def redirect_dashboard_to_settings() -> RedirectResponse:
+    return RedirectResponse(url="/settings/")
 
 # ── Settings app (React+Vite build output; reads the same sessionStorage
 # token the dashboard writes, no separate login) ──────────────────────────────
