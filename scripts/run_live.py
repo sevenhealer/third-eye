@@ -924,12 +924,8 @@ async def main() -> None:
                 # logged as that person entering.
                 lv_live, _, lv_decided, lv_can_block = live_state.get(
                     t.track_id, (True, 1.0, False, False))
-                # CDCN's spoof verdict, independent of the enforce toggle: a
-                # confirmed spoof must never become an enrollment candidate (it
-                # would pollute Pending Enrollments and could be merged into a
-                # real identity), even while only observing/collecting.
-                spoof_confirmed = lv_can_block and lv_decided and not lv_live
-                blocked = args.enforce_liveness and spoof_confirmed
+                blocked = (args.enforce_liveness and lv_can_block
+                           and lv_decided and not lv_live)
                 if blocked:
                     label, pid = "unknown", None
                 if label in ("", "?", "unknown"):
@@ -945,11 +941,12 @@ async def main() -> None:
                 ))
                 bbox = t.bbox
                 short = float(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
-                # A spoof (or a blocked static presentation) is never a good
-                # enrollment view — never capture a photo as a candidate, even
-                # in observe mode (spoof_confirmed ignores the enforce toggle).
-                good_view = (not blocked) and (not spoof_confirmed) and \
-                    t.confidence >= args.det_thresh and short >= 32
+                # Only ENFORCE mode bars a spoof from becoming a candidate. In
+                # observe mode we deliberately don't gate on the spoof verdict:
+                # the model isn't perfect and a real person must never be
+                # silently barred from enrollment. A spoof photo reaching Pending
+                # Enrollments is acceptable — reject it there.
+                good_view = (not blocked) and t.confidence >= args.det_thresh and short >= 32
                 # for an unknown good view, hand the capture a JPEG face crop so
                 # the candidate has a viewable photo (stored in MinIO)
                 crop_jpeg = None
