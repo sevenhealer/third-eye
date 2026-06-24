@@ -289,10 +289,19 @@ async def main() -> None:
     # a print/screen/statue does, so it scores near 0. Fed the FACE CROP (not
     # the whole frame) so a moving background can't fake liveness. None when
     # bypassed. live_state: track_id -> (is_live, score, decided).
-    from src.antispoofing.ensemble import AntiSpoofingEnsemble, TemporalConsistencyChecker
+    from src.antispoofing.ensemble import TemporalConsistencyChecker
     liveness = None if args.bypass_antispoofing else TemporalConsistencyChecker()
-    # Single source of truth for the live/static cutoff (shared with the ensemble).
-    liveness_threshold = AntiSpoofingEnsemble.TEMPORAL_LIVE_THRESHOLD
+    # A track is judged STATIC only once a full ~5s window has accumulated AND
+    # no single frame in it showed motion above this floor — i.e. nothing moved
+    # for 5s straight (a photo/statue). Any real blink/shift spikes well above
+    # this, so a still-but-live person is never blocked.
+    MOTION_THRESHOLD = 0.015
+    # The weight-free temporal signal is confounded by crop size/noise (a small
+    # static object can show MORE apparent motion than a large still real face),
+    # so it can't reliably separate live from spoof and must NOT hard-block on
+    # its own — it stays an observe-only hint. Real enforcement comes from the
+    # trained CDCN++ texture model. Flip to True only with a trustworthy model.
+    TEMPORAL_CAN_ENFORCE = False
     live_state: dict[int, tuple[bool, float, bool]] = {}
 
     # Auto-collection: save good-view face crops auto-labelled by the gate's
@@ -628,11 +637,11 @@ async def main() -> None:
             sustained = t.confidence < args.det_thresh
             short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
-            # Liveness: push this track's face crop and read its variance score.
-            # `decided` only becomes True once MINIMUM_FRAMES have accumulated —
+            # Liveness: push this track's face crop, then judge by recent motion.
+            # `decided` only becomes True once a full ~5s window has accumulated;
             # before that the track is treated as live (innocent until enough
             # evidence) so a just-appeared real face is never blocked.
-            is_live, live_score, decided = True, 1.0, False
+            is_live, live_score, decided, live_max = True, 1.0, False, 0.0
             if liveness is not None:
                 tid = str(t.track_id)
                 x1, y1 = max(bbox[0], 0), max(bbox[1], 0)
@@ -645,10 +654,14 @@ async def main() -> None:
                     # shapes. Normalizing also keeps the variance signal
                     # comparable across near vs far faces.
                     liveness.update(tid, cv2.resize(raw_crop, (112, 112)))
-                live_score = liveness.score(tid)
-                buf = liveness._buffers.get(tid)
-                decided = buf is not None and len(buf) >= liveness.MINIMUM_FRAMES
-                is_live = (not decided) or live_score >= liveness_threshold
+                # Live if the face moved appreciably (on average) over the last
+                # ~5s; static only after a full window of near-zero mean motion.
+                # Mean (not max) so one noise spike on a small crop can't fake
+                # liveness. live_score = mean motion (shown in logs/overlay).
+                live_score = liveness.recent_mean_motion(tid)
+                live_max = liveness.recent_max_motion(tid)
+                decided = liveness.long_window_full(tid)
+                is_live = (not decided) or live_score >= MOTION_THRESHOLD
                 live_state[t.track_id] = (is_live, live_score, decided)
 
                 # Auto-collection: once the gate has decided, save the crop
@@ -693,7 +706,10 @@ async def main() -> None:
             )
             # Enforcement: a confirmed static presentation can't be an enrolled
             # person — drop the name so it never recognizes or persists as one.
-            blocked = args.enforce_liveness and decided and not is_live
+            # Gated on TEMPORAL_CAN_ENFORCE: the temporal signal alone is too
+            # unreliable to block, so this is a no-op until CDCN++ drives it.
+            blocked = (args.enforce_liveness and TEMPORAL_CAN_ENFORCE
+                       and decided and not is_live)
             if blocked and name_txt:
                 name_txt = ""
             render_info.append({
@@ -702,6 +718,7 @@ async def main() -> None:
                 "sustained": sustained, "short_px": short_px,
                 "name_txt": name_txt,
                 "is_live": is_live, "live_score": live_score,
+                "live_max": live_max if liveness is not None else 0.0,
                 "decided": decided, "blocked": blocked,
             })
 
@@ -758,10 +775,13 @@ async def main() -> None:
                 console_extra += f"  BACK after {frames_gone} frames"
             if sustained:
                 console_extra += "  (low-conf sustain)"
-            if info.get("decided") and not info.get("is_live", True):
+            if info.get("decided"):
+                tag = ""
+                if not info.get("is_live", True):
+                    tag = f"  STATIC?{'/BLOCKED' if info.get('blocked') else ''}"
                 console_extra += (
-                    f"  STATIC?{'/BLOCKED' if info.get('blocked') else ''} "
-                    f"live={info.get('live_score', 0.0):.3f}"
+                    f"{tag}  mean={info.get('live_score', 0.0):.4f} "
+                    f"max={info.get('live_max', 0.0):.4f}"
                 )
             print(
                 f"[{meta.camera_id} | frame {meta.frame_id:>5}]  "
@@ -810,7 +830,8 @@ async def main() -> None:
                 # person_id, so a held-up photo of an enrolled person can't be
                 # logged as that person entering.
                 lv_live, _, lv_decided = live_state.get(t.track_id, (True, 1.0, False))
-                blocked = args.enforce_liveness and lv_decided and not lv_live
+                blocked = (args.enforce_liveness and TEMPORAL_CAN_ENFORCE
+                           and lv_decided and not lv_live)
                 if blocked:
                     label, pid = "unknown", None
                 if label in ("", "?", "unknown"):

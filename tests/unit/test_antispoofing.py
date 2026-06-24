@@ -111,6 +111,33 @@ def test_temporal_update_tolerates_varying_frame_sizes():
     assert 0.0 <= checker.score("t") <= 1.0
 
 
+def test_recent_motion_distinguishes_still_person_from_static_photo():
+    """
+    The motion-window signal must read a face that moves even once as live,
+    while a perfectly static presentation reads as no-motion. This is what
+    stops a still-but-real person being blocked.
+    """
+    checker = TemporalConsistencyChecker()
+    rng = np.random.default_rng(1)
+    base = np.full((64, 64, 3), 120, dtype=np.uint8)
+
+    # Static photo: identical frame every tick → ~zero recent motion.
+    for _ in range(checker.LONG_WINDOW):
+        checker.update("photo", base)
+    assert checker.long_window_full("photo")
+    assert checker.recent_max_motion("photo") < 0.015
+
+    # Live person: mostly still, but one blink/shift partway through → a motion
+    # spike that keeps recent_max_motion high for the whole window.
+    for i in range(checker.LONG_WINDOW):
+        if i == 30:
+            frame = (base.astype(np.int16) + rng.integers(-60, 60, base.shape)).clip(0, 255).astype(np.uint8)
+        else:
+            frame = base
+        checker.update("person", frame)
+    assert checker.recent_max_motion("person") >= 0.015
+
+
 def test_temporal_insufficient_frames_neutral_pass():
     """Fewer than MINIMUM_FRAMES accumulated → temporal check skipped."""
     ensemble = AntiSpoofingEnsemble(

@@ -124,14 +124,21 @@ class TemporalConsistencyChecker:
 
     WINDOW: int = 10
     MINIMUM_FRAMES: int = 3
+    # Longer "did anything move recently?" window. A live face blinks/shifts
+    # within a few seconds (motion spike); a photo/statue never does. Judging
+    # liveness on the MAX motion over this window — rather than the variance
+    # over ~0.7s — is what stops a still real person from being flagged static.
+    LONG_WINDOW: int = 75   # ~5 s at 15 fps
 
     def __init__(self) -> None:
         self._buffers: dict[str, collections.deque[float]] = {}
+        self._long: dict[str, collections.deque[float]] = {}
         self._prev_frames: dict[str, np.ndarray] = {}
 
     def update(self, track_id: str, frame: np.ndarray) -> None:
         """Push a new frame for the given track and record luminance diff."""
         buf = self._buffers.setdefault(track_id, collections.deque(maxlen=self.WINDOW))
+        long_buf = self._long.setdefault(track_id, collections.deque(maxlen=self.LONG_WINDOW))
         prev = self._prev_frames.get(track_id)
         if _CV2_AVAILABLE and prev is not None:
             gray_cur = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
@@ -143,8 +150,10 @@ class TemporalConsistencyChecker:
                 gray_cur = _cv2.resize(gray_cur, (gray_prev.shape[1], gray_prev.shape[0]))
             diff = float(np.mean(np.abs(gray_cur.astype(np.float32) - gray_prev.astype(np.float32))))
             buf.append(diff / 255.0)
+            long_buf.append(diff / 255.0)
         else:
             buf.append(0.0)
+            long_buf.append(0.0)
         if _CV2_AVAILABLE:
             self._prev_frames[track_id] = (
                 _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame.copy()
@@ -163,8 +172,37 @@ class TemporalConsistencyChecker:
         # Normalise: variance 1e-3 → fully live movement
         return min(variance / 1e-3, 1.0)
 
+    def recent_max_motion(self, track_id: str) -> float:
+        """
+        Largest single-frame motion (normalized luminance diff) over the long
+        window. A live face's blink/shift produces a high spike; a static
+        presentation stays at the sensor-noise floor. Returns 0.0 when empty.
+
+        Note: max is spike-sensitive — one encoding/detection-jitter spike on a
+        small crop pins it high for the whole window. recent_mean_motion is the
+        robust discriminator used for the live/static decision.
+        """
+        long_buf = self._long.get(track_id)
+        return max(long_buf) if long_buf else 0.0
+
+    def recent_mean_motion(self, track_id: str) -> float:
+        """
+        Average per-frame motion over the long window. A live face moves
+        continuously (high mean); a static object is mostly zero with rare noise
+        spikes (low mean), so this separates the two far better than the max.
+        """
+        long_buf = self._long.get(track_id)
+        return float(np.mean(long_buf)) if long_buf else 0.0
+
+    def long_window_full(self, track_id: str) -> bool:
+        """True once a full LONG_WINDOW of frames has accumulated — only then is
+        an absence-of-motion verdict trustworthy enough to block on."""
+        long_buf = self._long.get(track_id)
+        return long_buf is not None and len(long_buf) >= self.LONG_WINDOW
+
     def clear(self, track_id: str) -> None:
         self._buffers.pop(track_id, None)
+        self._long.pop(track_id, None)
         self._prev_frames.pop(track_id, None)
 
 
