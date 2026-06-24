@@ -408,10 +408,10 @@ export function AntiSpoofingPage() {
                     {c.val_acc != null ? `val_acc ${c.val_acc.toFixed(3)}` : 'acc —'}
                     {c.epoch != null ? ` · ep ${c.epoch}` : ''}
                   </span>
-                  {c.name !== '(active model)' && !c.active && (
+                  {!c.name.startsWith('(') && !c.active && (
                     <button onClick={() => onActivateCheckpoint(c)}>Activate</button>
                   )}
-                  {c.name !== '(active model)' && (
+                  {!c.name.startsWith('(') && (
                     <button className="link-button as-del" onClick={() => onDeleteCheckpoint(c)}>
                       ✕
                     </button>

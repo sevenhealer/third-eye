@@ -420,20 +420,27 @@ async def list_checkpoints(current_user: ActiveUser) -> list[Checkpoint]:
     marks whichever archived file currently matches cdcn_pp.pt by content."""
     current_user.require_role("admin")
     active_sha = _sha256(ACTIVE_CKPT) if ACTIVE_CKPT.is_file() else None
-    out: list[Checkpoint] = []
-    if ACTIVE_CKPT.is_file():
-        m = _read_meta(ACTIVE_META)
-        out.append(Checkpoint(name="(active model)", val_acc=m.get("val_acc"),
-                              epoch=m.get("epoch"), created=m.get("created"),
-                              source=m.get("source", "active"), active=True))
+    saved: list[Checkpoint] = []
+    active_is_saved = False
     if CKPT_DIR.is_dir():
         for pt in sorted(CKPT_DIR.glob("*.pt"),
                          key=lambda p: p.stat().st_mtime, reverse=True):
             m = _read_meta(pt.with_suffix(".json"))
-            out.append(Checkpoint(
+            is_active = active_sha is not None and _sha256(pt) == active_sha
+            active_is_saved = active_is_saved or is_active
+            saved.append(Checkpoint(
                 name=pt.stem, val_acc=m.get("val_acc"), epoch=m.get("epoch"),
-                created=m.get("created"), source=m.get("source"),
-                active=active_sha is not None and _sha256(pt) == active_sha))
+                created=m.get("created"), source=m.get("source"), active=is_active))
+    out: list[Checkpoint] = []
+    # Only show the synthetic active row when the live model isn't already one of
+    # the saved checkpoints — otherwise that saved one carries the active badge
+    # and we'd show two "active" rows for the same bytes.
+    if ACTIVE_CKPT.is_file() and not active_is_saved:
+        m = _read_meta(ACTIVE_META)
+        out.append(Checkpoint(name="(active, unsaved)", val_acc=m.get("val_acc"),
+                              epoch=m.get("epoch"), created=m.get("created"),
+                              source=m.get("source", "active"), active=True))
+    out.extend(saved)
     return out
 
 
