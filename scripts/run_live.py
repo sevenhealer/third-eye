@@ -291,18 +291,29 @@ async def main() -> None:
     # bypassed. live_state: track_id -> (is_live, score, decided).
     from src.antispoofing.ensemble import TemporalConsistencyChecker
     liveness = None if args.bypass_antispoofing else TemporalConsistencyChecker()
-    # A track is judged STATIC only once a full ~5s window has accumulated AND
-    # no single frame in it showed motion above this floor — i.e. nothing moved
-    # for 5s straight (a photo/statue). Any real blink/shift spikes well above
-    # this, so a still-but-live person is never blocked.
-    MOTION_THRESHOLD = 0.015
-    # The weight-free temporal signal is confounded by crop size/noise (a small
-    # static object can show MORE apparent motion than a large still real face),
-    # so it can't reliably separate live from spoof and must NOT hard-block on
-    # its own — it stays an observe-only hint. Real enforcement comes from the
-    # trained CDCN++ texture model. Flip to True only with a trustworthy model.
-    TEMPORAL_CAN_ENFORCE = False
-    live_state: dict[int, tuple[bool, float, bool]] = {}
+    MOTION_THRESHOLD = 0.015   # temporal observe-only hint floor (see below)
+
+    # CDCN++ texture model is the RELIABLE liveness enforcer (the weight-free
+    # temporal signal is confounded by crop size/noise and can't block — it
+    # stays observe-only). When a trained checkpoint exists it auto-loads here
+    # and drives both enforcement and the auto-collection labels.
+    cdcn = None
+    cdcn_ema: dict[int, float] = {}    # track_id -> smoothed CDCN live prob [0,1]
+    CDCN_LIVE_THRESHOLD = 0.5
+    if not args.bypass_antispoofing:
+        cdcn_path = ROOT / "models" / "weights" / "cdcn_pp.pt"
+        if cdcn_path.exists():
+            try:
+                from src.antispoofing.ensemble import CDCNWrapper
+                cdcn_device = "cpu" if args.cpu else "cuda"
+                cdcn = CDCNWrapper.load_from_checkpoint(str(cdcn_path), device=cdcn_device)
+                print(f"CDCN++ liveness model loaded ({cdcn_device}) — enforcement uses CDCN++")
+            except Exception as exc:
+                print(f"CDCN++ load failed ({exc}) — temporal observe-only")
+
+    # live_state: track_id -> (is_live, score, decided, can_block). can_block is
+    # True only when CDCN++ is the verdict source — the temporal gate never blocks.
+    live_state: dict[int, tuple[bool, float, bool, bool]] = {}
 
     # Auto-collection: save good-view face crops auto-labelled by the gate's
     # verdict for CDCN++ training. Needs the liveness checker to label them.
@@ -637,11 +648,10 @@ async def main() -> None:
             sustained = t.confidence < args.det_thresh
             short_px = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
 
-            # Liveness: push this track's face crop, then judge by recent motion.
-            # `decided` only becomes True once a full ~5s window has accumulated;
-            # before that the track is treated as live (innocent until enough
-            # evidence) so a just-appeared real face is never blocked.
-            is_live, live_score, decided, live_max = True, 1.0, False, 0.0
+            # Liveness verdict. CDCN++ (texture, trained) is the reliable
+            # enforcer when loaded; the weight-free temporal motion is only an
+            # observe-only hint (confounded by crop size, so it never blocks).
+            is_live, live_score, decided, live_max, can_block = True, 1.0, False, 0.0, False
             if liveness is not None:
                 tid = str(t.track_id)
                 x1, y1 = max(bbox[0], 0), max(bbox[1], 0)
@@ -654,15 +664,25 @@ async def main() -> None:
                     # shapes. Normalizing also keeps the variance signal
                     # comparable across near vs far faces.
                     liveness.update(tid, cv2.resize(raw_crop, (112, 112)))
-                # Live if the face moved appreciably (on average) over the last
-                # ~5s; static only after a full window of near-zero mean motion.
-                # Mean (not max) so one noise spike on a small crop can't fake
-                # liveness. live_score = mean motion (shown in logs/overlay).
+                # Temporal motion: observe-only hint (mean over ~5s; does not block).
                 live_score = liveness.recent_mean_motion(tid)
                 live_max = liveness.recent_max_motion(tid)
                 decided = liveness.long_window_full(tid)
                 is_live = (not decided) or live_score >= MOTION_THRESHOLD
-                live_state[t.track_id] = (is_live, live_score, decided)
+
+                # CDCN++ overrides as the verdict when loaded — it enforces and
+                # labels the collected crops. EMA-smoothed over frames for
+                # stability. live_score becomes the CDCN live probability.
+                if cdcn is not None and raw_crop.size:
+                    s = cdcn.score(raw_crop)
+                    prev = cdcn_ema.get(t.track_id)
+                    live_score = s if prev is None else 0.6 * prev + 0.4 * s
+                    cdcn_ema[t.track_id] = live_score
+                    decided = True
+                    is_live = live_score >= CDCN_LIVE_THRESHOLD
+                    can_block = True
+
+                live_state[t.track_id] = (is_live, live_score, decided, can_block)
 
                 # Auto-collection: once the gate has decided, save the crop
                 # under its verdict's folder (throttled per track) so the
@@ -704,11 +724,10 @@ async def main() -> None:
                 force=frames_gone > 3,
                 good_view=(not sustained) and short_px >= 32,
             )
-            # Enforcement: a confirmed static presentation can't be an enrolled
-            # person — drop the name so it never recognizes or persists as one.
-            # Gated on TEMPORAL_CAN_ENFORCE: the temporal signal alone is too
-            # unreliable to block, so this is a no-op until CDCN++ drives it.
-            blocked = (args.enforce_liveness and TEMPORAL_CAN_ENFORCE
+            # Enforcement: a confirmed spoof can't be an enrolled person — drop
+            # the name so it never recognizes or persists as one. Only CDCN++
+            # can block (can_block); the temporal hint never does.
+            blocked = (args.enforce_liveness and can_block
                        and decided and not is_live)
             if blocked and name_txt:
                 name_txt = ""
@@ -719,7 +738,7 @@ async def main() -> None:
                 "name_txt": name_txt,
                 "is_live": is_live, "live_score": live_score,
                 "live_max": live_max if liveness is not None else 0.0,
-                "decided": decided, "blocked": blocked,
+                "decided": decided, "blocked": blocked, "can_block": can_block,
             })
 
         # Same-frame identity collision: two DIFFERENT simultaneously-tracked
@@ -778,11 +797,14 @@ async def main() -> None:
             if info.get("decided"):
                 tag = ""
                 if not info.get("is_live", True):
-                    tag = f"  STATIC?{'/BLOCKED' if info.get('blocked') else ''}"
-                console_extra += (
-                    f"{tag}  mean={info.get('live_score', 0.0):.4f} "
-                    f"max={info.get('live_max', 0.0):.4f}"
-                )
+                    tag = f"  SPOOF?{'/BLOCKED' if info.get('blocked') else ''}"
+                if info.get("can_block"):   # CDCN++ verdict
+                    console_extra += f"{tag}  cdcn={info.get('live_score', 0.0):.3f}"
+                else:                       # temporal observe-only hint
+                    console_extra += (
+                        f"  motion_mean={info.get('live_score', 0.0):.4f} "
+                        f"max={info.get('live_max', 0.0):.4f}"
+                    )
             print(
                 f"[{meta.camera_id} | frame {meta.frame_id:>5}]  "
                 f"track={t.track_id:>3}  "
@@ -790,9 +812,12 @@ async def main() -> None:
                 f"conf={t.confidence:.3f}{console_extra}"
             )
             if args.show or stm is not None:
-                static = info.get("decided") and not info.get("is_live", True)
+                # Only flag a spoof visually on the reliable CDCN++ verdict;
+                # the temporal hint is too noisy to colour a box on.
+                static = (info.get("decided") and not info.get("is_live", True)
+                          and info.get("can_block"))
                 if static:
-                    color = (0, 0, 255)      # red: static presentation (spoof?)
+                    color = (0, 0, 255)      # red: CDCN++ says spoof
                 elif recently_back:
                     color = (0, 165, 255)    # orange: returned after a gap
                 elif sustained:
@@ -801,7 +826,7 @@ async def main() -> None:
                     color = (0, 220, 0)      # green: normal high-conf track
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
                 if static:
-                    tag = "SPOOF — BLOCKED" if info.get("blocked") else "STATIC?"
+                    tag = "SPOOF — BLOCKED" if info.get("blocked") else "SPOOF?"
                     cv2.putText(frame, tag,
                                 (bbox[0], min(bbox[3] + 18, frame.shape[0] - 4)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
@@ -829,8 +854,9 @@ async def main() -> None:
                 # Enforced static presentation: present as unknown with no
                 # person_id, so a held-up photo of an enrolled person can't be
                 # logged as that person entering.
-                lv_live, _, lv_decided = live_state.get(t.track_id, (True, 1.0, False))
-                blocked = (args.enforce_liveness and TEMPORAL_CAN_ENFORCE
+                lv_live, _, lv_decided, lv_can_block = live_state.get(
+                    t.track_id, (True, 1.0, False, False))
+                blocked = (args.enforce_liveness and lv_can_block
                            and lv_decided and not lv_live)
                 if blocked:
                     label, pid = "unknown", None
@@ -984,6 +1010,7 @@ async def main() -> None:
                 last_collect.pop(stale, None)
                 collect_per_track.pop(stale, None)
                 last_saved_gray.pop(stale, None)
+                cdcn_ema.pop(stale, None)
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")
