@@ -13,6 +13,7 @@ export interface CameraLaunchArgs {
   cpu: boolean
   enforce_liveness?: boolean
   collect_antispoofing?: boolean
+  ignore_regions?: number[][]
 }
 
 export interface CameraStatus {

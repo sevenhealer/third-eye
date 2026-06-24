@@ -207,6 +207,9 @@ class CameraSupervisor:
             argv += ["--enforce-liveness"]
         if launch_args.get("collect_antispoofing"):
             argv += ["--collect-antispoofing"]
+        if launch_args.get("ignore_regions"):
+            import json
+            argv += ["--ignore-regions", json.dumps(launch_args["ignore_regions"])]
         # --show opens a cv2 GUI window - meaningless and dangerous on a
         # headless server process. --bypass-antispoofing skips liveness
         # checks entirely. Neither is ever accepted into launch_args at the

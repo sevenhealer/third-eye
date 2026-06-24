@@ -16,6 +16,7 @@ import {
 } from '../api/client'
 import { usePolling } from '../api/usePolling'
 import { CameraForm, type CameraFormSubmit } from '../components/CameraForm'
+import { RegionMaskModal } from '../components/RegionMaskModal'
 import { Modal } from '../components/Modal'
 import { useAdvancedMode } from '../components/advancedModeContext'
 import { useFeedback } from '../components/feedbackContext'
@@ -32,6 +33,7 @@ export function CamerasPage() {
   const [cameras, setCameras] = useState<CameraStatus[]>([])
   const [gpus, setGpus] = useState<GpuStat[]>([])
   const [editing, setEditing] = useState<CameraDetail | undefined>(undefined)
+  const [masking, setMasking] = useState<CameraDetail | undefined>(undefined)
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState('')
   const [viewingLog, setViewingLog] = useState<string | undefined>(undefined)
@@ -71,6 +73,15 @@ export function CamerasPage() {
     setError('')
     try {
       setEditing(await getCamera(cameraId))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load camera.')
+    }
+  }
+
+  async function openMask(cameraId: string) {
+    setError('')
+    try {
+      setMasking(await getCamera(cameraId))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load camera.')
     }
@@ -176,6 +187,7 @@ export function CamerasPage() {
                   <button onClick={() => handleStart(cam.camera_id)}>Start</button>
                 )}
                 <button onClick={() => openEdit(cam.camera_id)}>Edit</button>
+                <button onClick={() => openMask(cam.camera_id)}>Mask</button>
                 <button onClick={() => openLog(cam.camera_id)}>Log</button>
                 <button className="btn-danger" onClick={() => handleDelete(cam.camera_id)}>
                   Remove
@@ -196,6 +208,17 @@ export function CamerasPage() {
       {adding && <CameraForm gpus={gpus} onSubmit={handleCreate} onCancel={() => setAdding(false)} />}
       {editing && (
         <CameraForm existing={editing} gpus={gpus} onSubmit={handleSaveEdit} onCancel={() => setEditing(undefined)} />
+      )}
+      {masking && (
+        <RegionMaskModal
+          camera={masking}
+          onClose={() => setMasking(undefined)}
+          onSaved={() => {
+            setMasking(undefined)
+            toast('Mask saved — camera restarting to apply', 'success')
+            refresh()
+          }}
+        />
       )}
       {viewingLog && (
         <Modal

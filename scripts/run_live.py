@@ -95,6 +95,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bypass-antispoofing", action="store_true",
                    help="Disable the liveness check entirely (no scoring, no "
                         "annotation) — DEV MODE ONLY")
+    p.add_argument("--ignore-regions", default=None,
+                   help="JSON list of normalized [x1,y1,x2,y2] rectangles "
+                        "(0-1). Detections centered inside any are dropped — "
+                        "masks a burnt-in timestamp/OSD or a fixed false "
+                        "positive (e.g. a statue) so it isn't tracked.")
     p.add_argument("--collect-antispoofing", action="store_true",
                    help="Auto-save face crops to data/antispoofing/{live,spoof}/, "
                         "auto-labelled by the liveness gate's own verdict, for "
@@ -289,6 +294,17 @@ async def main() -> None:
     # a print/screen/statue does, so it scores near 0. Fed the FACE CROP (not
     # the whole frame) so a moving background can't fake liveness. None when
     # bypassed. live_state: track_id -> (is_live, score, decided).
+    # Normalized [x1,y1,x2,y2] rects whose detections are dropped (OSD/timestamp
+    # mask, fixed false positives). Parsed once; malformed JSON disables it.
+    ignore_regions: list[tuple[float, float, float, float]] = []
+    if args.ignore_regions:
+        try:
+            import json as _json
+            ignore_regions = [tuple(float(v) for v in r) for r in _json.loads(args.ignore_regions)]
+            print(f"Ignore regions: {len(ignore_regions)} mask(s) active")
+        except (ValueError, TypeError) as exc:
+            print(f"Bad --ignore-regions ({exc}) — ignoring")
+
     from src.antispoofing.ensemble import TemporalConsistencyChecker
     liveness = None if args.bypass_antispoofing else TemporalConsistencyChecker()
     MOTION_THRESHOLD = 0.015   # temporal observe-only hint floor (see below)
@@ -606,10 +622,19 @@ async def main() -> None:
         last_infer_ms = (time.monotonic() - t_inf) * 1000.0
 
         # Wrap insightface detections as ObjectDetection for ByteTracker
+        fh, fw = frame.shape[:2]
         dets: list[ObjectDetection] = []
         for face in raw_faces:
             bbox = face.bbox.astype("float32")
             if min(bbox[2] - bbox[0], bbox[3] - bbox[1]) < args.min_face:
+                continue
+            # Ignore-region mask: drop a detection whose center falls inside a
+            # masked rect (burnt-in OSD/timestamp that ticks, or a fixed
+            # false-positive like a statue). Rects are normalized [x1,y1,x2,y2].
+            cx = ((bbox[0] + bbox[2]) / 2) / fw
+            cy = ((bbox[1] + bbox[3]) / 2) / fh
+            if any(rx1 <= cx <= rx2 and ry1 <= cy <= ry2
+                   for rx1, ry1, rx2, ry2 in ignore_regions):
                 continue
             dets.append(
                 ObjectDetection(

@@ -58,6 +58,10 @@ class CameraLaunchArgs(BaseModel):
     # training (reviewable/correctable from the Anti-Spoofing page).
     enforce_liveness: bool = False
     collect_antispoofing: bool = False
+    # Normalized [x1,y1,x2,y2] rectangles (0-1) whose detections are dropped —
+    # masks a burnt-in timestamp/OSD (its ticking digits fake motion/liveness)
+    # or a fixed false positive like a statue.
+    ignore_regions: list[list[float]] = Field(default_factory=list)
     # --show (opens a cv2 GUI window) and --bypass-antispoofing (skips
     # liveness checks) are intentionally not fields here at all - extra
     # ="forbid" means a client can't even smuggle them through by name.

@@ -511,3 +511,24 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .as-dot.on { background: var(--success); box-shadow: 0 0 8px var(--success-glow); animation: as-pulse 1.6s infinite; }
 @keyframes as-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 .as-collection-cam button { padding: 5px 14px; font-size: 13px; }
+
+/* Region-mask picker (draw ignore zones over the live feed) */
+.mask-canvas {
+  position: relative; width: 100%; max-width: 720px; margin: 8px 0;
+  cursor: crosshair; user-select: none; line-height: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+}
+.mask-canvas img { width: 100%; display: block; pointer-events: none; }
+.mask-rect {
+  position: absolute; border: 2px solid var(--danger);
+  background: rgba(255, 60, 60, 0.22); box-sizing: border-box;
+}
+.mask-rect-live { border-style: dashed; background: rgba(255, 60, 60, 0.12); }
+.mask-rect-del {
+  position: absolute; top: -10px; right: -10px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--danger); color: #fff; border: none; cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 0;
+}
+.modal-actions { display: flex; align-items: center; gap: 12px; justify-content: flex-end; margin-top: 14px; }
+.modal-actions .hint { margin-right: auto; }
