@@ -3,11 +3,14 @@ import {
   type AntiSpoofDataset,
   type AntiSpoofItem,
   type TrainStatus,
+  type CollectionCamera,
   getAntiSpoofDataset,
   relabelCrop,
   deleteCrop,
   startTraining,
   getTrainStatus,
+  listCollection,
+  setCollection,
   fetchCropBlobUrl,
 } from '../api/client'
 import { usePolling } from '../api/usePolling'
@@ -43,18 +46,37 @@ export function AntiSpoofingPage() {
   const { toast, confirm } = useFeedback()
   const [data, setData] = useState<AntiSpoofDataset | null>(null)
   const [train, setTrain] = useState<TrainStatus | null>(null)
+  const [cameras, setCameras] = useState<CollectionCamera[]>([])
   const [epochs, setEpochs] = useState(30)
   const [error, setError] = useState('')
 
   const refresh = useCallback(async () => {
     try {
-      const [ds, ts] = await Promise.all([getAntiSpoofDataset(), getTrainStatus()])
+      const [ds, ts, cams] = await Promise.all([
+        getAntiSpoofDataset(),
+        getTrainStatus(),
+        listCollection(),
+      ])
       setData(ds)
       setTrain(ts)
+      setCameras(cams)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load anti-spoofing data.')
     }
   }, [])
+
+  const toggleCollection = async (cam: CollectionCamera) => {
+    try {
+      await setCollection(cam.camera_id, !cam.collecting)
+      toast(
+        `Collection ${!cam.collecting ? 'started' : 'stopped'} on ${cam.display_name}`,
+        'success',
+      )
+      refresh()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not change collection', 'error')
+    }
+  }
 
   usePolling(refresh, 4000)
 
@@ -113,6 +135,23 @@ export function AntiSpoofingPage() {
       </p>
 
       {error && <div className="form-error">{error}</div>}
+
+      <div className="as-collection">
+        <span className="as-collection-title">Data collection</span>
+        {cameras.length === 0 && <span className="hint">No active cameras.</span>}
+        {cameras.map((cam) => (
+          <div key={cam.camera_id} className="as-collection-cam">
+            <span className={`as-dot ${cam.collecting ? 'on' : ''}`} />
+            <span className="as-collection-name">{cam.display_name}</span>
+            <button
+              className={cam.collecting ? 'btn-danger' : 'btn-primary'}
+              onClick={() => toggleCollection(cam)}
+            >
+              {cam.collecting ? 'Stop' : 'Start'}
+            </button>
+          </div>
+        ))}
+      </div>
 
       <div className="as-stats">
         <div className="as-stat as-stat-live">

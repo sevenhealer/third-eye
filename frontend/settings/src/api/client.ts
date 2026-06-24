@@ -284,6 +284,20 @@ export const startTraining = (epochs: number) =>
 export const getTrainStatus = () =>
   apiFetch<TrainStatus>('/api/v1/antispoofing/train/status')
 
+export interface CollectionCamera {
+  camera_id: string
+  display_name: string
+  desired_state: string
+  collecting: boolean
+}
+export const listCollection = () =>
+  apiFetch<CollectionCamera[]>('/api/v1/antispoofing/collection')
+export const setCollection = (cameraId: string, enabled: boolean) =>
+  apiFetch('/api/v1/antispoofing/collection', {
+    method: 'POST',
+    body: JSON.stringify({ camera_id: cameraId, enabled }),
+  })
+
 export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const token = getToken() || ''

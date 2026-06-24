@@ -5,10 +5,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.auth import ActiveUser
+from src.api.routers.cameras import KICK_CHANNEL
+from src.core.database import get_db, get_redis
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -177,3 +181,62 @@ async def start_training(body: TrainBody, current_user: ActiveUser) -> TrainStat
 async def training_status(current_user: ActiveUser) -> TrainStatus:
     current_user.require_role("admin")
     return _parse_train_log()
+
+
+# ── Collection start/stop (per camera) ───────────────────────────────────────
+
+class CollectionCamera(BaseModel):
+    camera_id: str
+    display_name: str
+    desired_state: str
+    collecting: bool
+
+
+@router.get("/collection", response_model=list[CollectionCamera])
+async def list_collection(
+    current_user: ActiveUser, db: AsyncSession = Depends(get_db)
+) -> list[CollectionCamera]:
+    """Active cameras and whether each is currently collecting anti-spoof data."""
+    current_user.require_role("admin")
+    rows = (await db.execute(text(
+        "SELECT camera_id, display_name, desired_state, "
+        "COALESCE((launch_args->>'collect_antispoofing')::boolean, false) AS collecting "
+        "FROM cameras WHERE is_active = true ORDER BY display_name"
+    ))).fetchall()
+    return [
+        CollectionCamera(camera_id=r.camera_id, display_name=r.display_name,
+                         desired_state=r.desired_state, collecting=r.collecting)
+        for r in rows
+    ]
+
+
+class CollectionToggle(BaseModel):
+    camera_id: str
+    enabled: bool
+
+
+@router.post("/collection")
+async def set_collection(
+    body: CollectionToggle, current_user: ActiveUser, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Start/stop anti-spoof data collection on a camera. Flips the camera's
+    collect_antispoofing launch arg and bumps config_version so the supervisor
+    restarts it with the change."""
+    current_user.require_role("admin")
+    result = await db.execute(text(
+        "UPDATE cameras SET "
+        "launch_args = jsonb_set(COALESCE(launch_args, '{}'::jsonb), "
+        "'{collect_antispoofing}', to_jsonb(cast(:enabled AS boolean))), "
+        "config_version = config_version + 1 "
+        "WHERE camera_id = :cid AND is_active = true"
+    ), {"enabled": body.enabled, "cid": body.camera_id})
+    if result.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Camera not found.")
+    await db.commit()
+    try:  # nudge the supervisor to apply immediately (poll is the backstop)
+        redis = await get_redis()
+        await redis.publish(KICK_CHANNEL, "1")
+    except Exception as exc:
+        logger.warning("antispoofing_collection_kick_failed", error=str(exc))
+    logger.info("antispoofing_collection_set", camera_id=body.camera_id, enabled=body.enabled)
+    return {"camera_id": body.camera_id, "collecting": body.enabled}

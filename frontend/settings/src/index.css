@@ -497,3 +497,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .as-badge-spoof { color: var(--danger); }
 .as-card-actions .link-button { margin-left: auto; font-size: 12px; }
 .as-del { color: var(--danger); }
+
+/* Anti-spoofing data collection control */
+.as-collection {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin: 16px 0; padding: 12px 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.as-collection-title { font-weight: 600; color: var(--text-dim); text-transform: uppercase; font-size: 12px; letter-spacing: 0.04em; }
+.as-collection-cam { display: flex; align-items: center; gap: 8px; }
+.as-collection-name { font-size: 14px; }
+.as-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-faint); }
+.as-dot.on { background: var(--success); box-shadow: 0 0 8px var(--success-glow); animation: as-pulse 1.6s infinite; }
+@keyframes as-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.as-collection-cam button { padding: 5px 14px; font-size: 13px; }
