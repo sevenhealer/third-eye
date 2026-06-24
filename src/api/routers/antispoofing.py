@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shutil
@@ -58,14 +57,6 @@ def _safe_slug(name: str) -> str:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Name must be 1-64 chars of letters, digits, . _ - only.")
     return name
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _read_meta(json_path: Path) -> dict:
@@ -440,30 +431,27 @@ async def list_checkpoints(current_user: ActiveUser) -> list[Checkpoint]:
     marks whichever archived file currently matches cdcn_pp.pt by content."""
     current_user.require_role("admin")
     active_set = _active_names()
-    # Single-model mode (empty set): active = whichever file matches cdcn_pp.pt
-    # by content. Ensemble mode: active = membership in the set.
-    active_sha = (_sha256(ACTIVE_CKPT)
-                  if (not active_set and ACTIVE_CKPT.is_file()) else None)
+    # A saved checkpoint is active ONLY by set membership — never by matching
+    # cdcn_pp's bytes. (Byte-matching was confusing: a checkpoint saved from the
+    # active model is identical to cdcn_pp, so it looked active even after being
+    # removed from the set.)
     saved: list[Checkpoint] = []
-    active_is_saved = False
     if CKPT_DIR.is_dir():
         for pt in sorted(CKPT_DIR.glob("*.pt"),
                          key=lambda p: p.stat().st_mtime, reverse=True):
             m = _read_meta(pt.with_suffix(".json"))
-            is_active = (pt.stem in active_set if active_set
-                         else active_sha is not None and _sha256(pt) == active_sha)
-            active_is_saved = active_is_saved or is_active
             saved.append(Checkpoint(
                 name=pt.stem, val_acc=m.get("val_acc"), epoch=m.get("epoch"),
-                created=m.get("created"), source=m.get("source"), active=is_active))
+                created=m.get("created"), source=m.get("source"),
+                active=pt.stem in active_set))
     out: list[Checkpoint] = []
-    # Synthetic active row only in single-model mode, when the live model isn't
-    # itself a saved checkpoint (otherwise the saved one carries the badge).
-    if not active_set and ACTIVE_CKPT.is_file() and not active_is_saved:
+    # With no active set, the gate falls back to the single signed cdcn_pp.pt —
+    # show that as its own (uneditable) active row.
+    if not active_set and ACTIVE_CKPT.is_file():
         m = _read_meta(ACTIVE_META)
-        out.append(Checkpoint(name="(active, unsaved)", val_acc=m.get("val_acc"),
+        out.append(Checkpoint(name="(default model)", val_acc=m.get("val_acc"),
                               epoch=m.get("epoch"), created=m.get("created"),
-                              source=m.get("source", "active"), active=True))
+                              source=m.get("source", "fallback"), active=True))
     out.extend(saved)
     return out
 
