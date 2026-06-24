@@ -11,6 +11,8 @@ export interface CameraLaunchArgs {
   recognize: boolean
   persist_events: boolean
   cpu: boolean
+  enforce_liveness?: boolean
+  collect_antispoofing?: boolean
 }
 
 export interface CameraStatus {

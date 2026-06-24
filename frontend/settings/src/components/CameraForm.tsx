@@ -12,6 +12,8 @@ const DEFAULT_LAUNCH_ARGS: CameraLaunchArgs = {
   recognize: false,
   persist_events: false,
   cpu: false,
+  enforce_liveness: false,
+  collect_antispoofing: false,
 }
 
 // For create: the full NewCameraInput. For edit: only the fields that
@@ -134,6 +136,22 @@ export function CameraForm({ existing, gpus, onSubmit, onCancel }: Props) {
             onChange={(e) => setLaunchArgs({ ...launchArgs, persist_events: e.target.checked })}
           />
           Record entry/exit + alerts
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={launchArgs.enforce_liveness ?? false}
+            onChange={(e) => setLaunchArgs({ ...launchArgs, enforce_liveness: e.target.checked })}
+          />
+          Enforce liveness (block photos/screens)
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={launchArgs.collect_antispoofing ?? false}
+            onChange={(e) => setLaunchArgs({ ...launchArgs, collect_antispoofing: e.target.checked })}
+          />
+          Collect anti-spoofing training data
         </label>
 
         {advanced && (

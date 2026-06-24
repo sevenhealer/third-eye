@@ -95,6 +95,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bypass-antispoofing", action="store_true",
                    help="Disable the liveness check entirely (no scoring, no "
                         "annotation) — DEV MODE ONLY")
+    p.add_argument("--collect-antispoofing", action="store_true",
+                   help="Auto-save face crops to data/antispoofing/{live,spoof}/, "
+                        "auto-labelled by the liveness gate's own verdict, for "
+                        "later CDCN++ training. Labels are reviewable/correctable "
+                        "from the Anti-Spoofing page. Requires liveness on (i.e. "
+                        "not --bypass-antispoofing).")
     p.add_argument("--enforce-liveness", action="store_true",
                    help="HARD-BLOCK static presentations (photos/screens/"
                         "statues): a track judged non-live is forced to "
@@ -288,6 +294,20 @@ async def main() -> None:
     # Single source of truth for the live/static cutoff (shared with the ensemble).
     liveness_threshold = AntiSpoofingEnsemble.TEMPORAL_LIVE_THRESHOLD
     live_state: dict[int, tuple[bool, float, bool]] = {}
+
+    # Auto-collection: save good-view face crops auto-labelled by the gate's
+    # verdict for CDCN++ training. Needs the liveness checker to label them.
+    collect_dirs: dict[str, Path] = {}
+    last_collect: dict[int, int] = {}   # track_id -> last frame a crop was saved
+    COLLECT_EVERY = 15                  # ~1 crop/sec/track at 15fps, avoid flooding
+    if args.collect_antispoofing and liveness is not None:
+        for lbl in ("live", "spoof"):
+            d = ROOT / "data" / "antispoofing" / lbl
+            d.mkdir(parents=True, exist_ok=True)
+            collect_dirs[lbl] = d
+        print(f"Anti-spoofing collection: ON → {ROOT / 'data' / 'antispoofing'}")
+    elif args.collect_antispoofing:
+        print("Anti-spoofing collection requested but liveness is bypassed — disabled.")
 
     # Layer 4 (recognition): track embedding -> pgvector gallery -> name.
     # Tracking IDs stay anonymous and session-local; the gallery lookup is
@@ -602,20 +622,32 @@ async def main() -> None:
                 tid = str(t.track_id)
                 x1, y1 = max(bbox[0], 0), max(bbox[1], 0)
                 x2, y2 = max(bbox[2], 0), max(bbox[3], 0)
-                crop = frame[y1:y2, x1:x2]
-                if crop.size:
+                raw_crop = frame[y1:y2, x1:x2]
+                if raw_crop.size:
                     # Resize to a fixed canonical size: the face box changes
                     # dimensions frame to frame, but the checker diffs the
                     # current crop against the previous one and needs matching
                     # shapes. Normalizing also keeps the variance signal
                     # comparable across near vs far faces.
-                    crop = cv2.resize(crop, (112, 112))
-                    liveness.update(tid, crop)
+                    liveness.update(tid, cv2.resize(raw_crop, (112, 112)))
                 live_score = liveness.score(tid)
                 buf = liveness._buffers.get(tid)
                 decided = buf is not None and len(buf) >= liveness.MINIMUM_FRAMES
                 is_live = (not decided) or live_score >= liveness_threshold
                 live_state[t.track_id] = (is_live, live_score, decided)
+
+                # Auto-collection: once the gate has decided, save the crop
+                # under its verdict's folder (throttled per track) so the
+                # dataset is auto-labelled live/spoof for CDCN++ training. The
+                # operator corrects mistakes later on the Anti-Spoofing page.
+                if (collect_dirs and decided and raw_crop.size
+                        and short_px >= 32
+                        and frame_count - last_collect.get(t.track_id, -999) >= COLLECT_EVERY):
+                    lbl = "live" if is_live else "spoof"
+                    fname = (collect_dirs[lbl]
+                             / f"{args.camera_id}_{frame_count:07d}_t{t.track_id}.jpg")
+                    cv2.imwrite(str(fname), raw_crop)
+                    last_collect[t.track_id] = frame_count
 
             # a return-from-gap could be a different person on the same ID —
             # flag the track and re-verify immediately
@@ -895,6 +927,7 @@ async def main() -> None:
             for stale in [tid for tid in live_state if tid not in active]:
                 liveness.clear(str(stale))
                 live_state.pop(stale, None)
+                last_collect.pop(stale, None)
 
         if frame_count % 30 == 0 and not tracked:
             print(f"  — {frame_count} frames processed, {len(unique_ids)} unique ID(s) so far —")

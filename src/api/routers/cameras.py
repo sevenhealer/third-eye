@@ -51,6 +51,13 @@ class CameraLaunchArgs(BaseModel):
     recognize: bool = False
     persist_events: bool = False
     cpu: bool = False
+    # Liveness/anti-spoofing. enforce_liveness hard-blocks a static
+    # presentation (photo/screen/statue) — it's forced to unknown, never
+    # recognized or persisted. collect_antispoofing auto-saves face crops,
+    # auto-labelled live/spoof by the gate's own verdict, for later CDCN++
+    # training (reviewable/correctable from the Anti-Spoofing page).
+    enforce_liveness: bool = False
+    collect_antispoofing: bool = False
     # --show (opens a cv2 GUI window) and --bypass-antispoofing (skips
     # liveness checks) are intentionally not fields here at all - extra
     # ="forbid" means a client can't even smuggle them through by name.

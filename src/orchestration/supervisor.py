@@ -203,6 +203,10 @@ class CameraSupervisor:
             argv += ["--reid-thresh", str(launch_args["reid_thresh"])]
         if launch_args.get("min_face") is not None:
             argv += ["--min-face", str(launch_args["min_face"])]
+        if launch_args.get("enforce_liveness"):
+            argv += ["--enforce-liveness"]
+        if launch_args.get("collect_antispoofing"):
+            argv += ["--collect-antispoofing"]
         # --show opens a cv2 GUI window - meaningless and dangerous on a
         # headless server process. --bypass-antispoofing skips liveness
         # checks entirely. Neither is ever accepted into launch_args at the
