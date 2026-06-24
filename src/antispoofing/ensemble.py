@@ -83,7 +83,7 @@ class CDCNWrapper:
         return float(self._model(face_crop))
 
     @classmethod
-    def load_from_checkpoint(cls, weights_path: str, device: str = "cpu") -> "CDCNWrapper":
+    def load_from_checkpoint(cls, weights_path: str, device: str = "cpu") -> CDCNWrapper:
         """
         Load CDCN++ weights from a .pt checkpoint and return a ready wrapper.
 
@@ -136,6 +136,11 @@ class TemporalConsistencyChecker:
         if _CV2_AVAILABLE and prev is not None:
             gray_cur = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
             gray_prev = prev
+            # Callers may pass variable-size crops (a face box changes size as
+            # the person moves). Align shapes before diffing so a size change
+            # can't crash the diff; resize current to the previous frame's size.
+            if gray_cur.shape != gray_prev.shape:
+                gray_cur = _cv2.resize(gray_cur, (gray_prev.shape[1], gray_prev.shape[0]))
             diff = float(np.mean(np.abs(gray_cur.astype(np.float32) - gray_prev.astype(np.float32))))
             buf.append(diff / 255.0)
         else:

@@ -9,11 +9,9 @@ from src.antispoofing.ensemble import (
     AntiSpoofingEnsemble,
     CDCNWrapper,
     MiniFASWrapper,
-    SpoofingResult,
     TemporalConsistencyChecker,
 )
 from src.core.exceptions import LowConfidenceError, SpoofingDetectedError
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -97,6 +95,20 @@ def test_temporal_still_image_with_frames_raises_spoof_error():
     )
     with pytest.raises(SpoofingDetectedError, match="Temporal"):
         ensemble.check(crop(), "track1")
+
+
+def test_temporal_update_tolerates_varying_frame_sizes():
+    """
+    A live caller feeds per-track face crops whose box size changes frame to
+    frame. update() must not crash on the shape change (regression: it used to
+    raise a broadcast ValueError when consecutive crops differed in size).
+    """
+    checker = TemporalConsistencyChecker()
+    rng = np.random.default_rng(0)
+    for h, w in [(120, 90), (118, 95), (124, 88), (130, 92), (126, 97)]:
+        checker.update("t", rng.integers(0, 255, (h, w, 3), dtype=np.uint8))
+    # Accumulated a usable score without error.
+    assert 0.0 <= checker.score("t") <= 1.0
 
 
 def test_temporal_insufficient_frames_neutral_pass():

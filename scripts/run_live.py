@@ -604,6 +604,12 @@ async def main() -> None:
                 x2, y2 = max(bbox[2], 0), max(bbox[3], 0)
                 crop = frame[y1:y2, x1:x2]
                 if crop.size:
+                    # Resize to a fixed canonical size: the face box changes
+                    # dimensions frame to frame, but the checker diffs the
+                    # current crop against the previous one and needs matching
+                    # shapes. Normalizing also keeps the variance signal
+                    # comparable across near vs far faces.
+                    crop = cv2.resize(crop, (112, 112))
                     liveness.update(tid, crop)
                 live_score = liveness.score(tid)
                 buf = liveness._buffers.get(tid)
