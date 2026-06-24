@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.core.exceptions import ModelChecksumError, ModelLoadError
@@ -12,6 +12,11 @@ from src.core.logging import get_logger
 logger = get_logger(__name__)
 
 _CHUNK = 65536  # 64 KiB read chunks for large weight files
+
+# Repo-relative manifest location. Works natively (repo root) AND in the
+# container (where the repo is copied to /app), so it never hardcodes /app the
+# way the old settings.model_manifest_path did — that path broke native runs.
+DEFAULT_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "models" / "manifest.json"
 
 
 def compute_sha256(path: Path) -> str:
@@ -62,7 +67,7 @@ class ModelRegistry:
             name=name,
             path=str(path),
             sha256=digest,
-            signed_at=datetime.now(timezone.utc).isoformat(),
+            signed_at=datetime.now(UTC).isoformat(),
             version=version,
         )
         self._entries[name] = entry
@@ -153,13 +158,18 @@ def get_registry() -> ModelRegistry:
     return _registry
 
 
-def startup_verify(manifest_path: Path) -> None:
+def startup_verify(manifest_path: Path | None = None) -> None:
     """
     Load manifest and verify all registered weights.
+
+    Defaults to the repo-relative manifest (``DEFAULT_MANIFEST_PATH``) so it
+    resolves correctly both natively and in the container.
 
     Called during API lifespan startup. Raises ModelChecksumError on tamper/corruption.
     No-ops if the manifest file does not exist (first boot before any model is signed).
     """
+    if manifest_path is None:
+        manifest_path = DEFAULT_MANIFEST_PATH
     if not manifest_path.exists():
         logger.info("model_manifest_absent_skipping_verification", path=str(manifest_path))
         return

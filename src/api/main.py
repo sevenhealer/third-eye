@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-
 from pathlib import Path
 
 from fastapi import FastAPI, Request, status
@@ -25,7 +24,8 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("third_eye_starting", env=settings.app_env)
     from src.core.model_registry import startup_verify
-    startup_verify(settings.model_manifest_path)
+    # Repo-relative default — resolves both natively and in the container.
+    startup_verify()
     # Warm up connections
     await get_redis()
     get_neo4j_driver()
@@ -143,7 +143,18 @@ async def health() -> dict:
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-from src.api.routers import auth, cameras, identities, events, queries, alerts, admin, zones, hardware, manual_enroll  # noqa: E402
+from src.api.routers import (  # noqa: E402
+    admin,
+    alerts,
+    auth,
+    cameras,
+    events,
+    hardware,
+    identities,
+    manual_enroll,
+    queries,
+    zones,
+)
 
 app.include_router(auth.router,        prefix="/api/v1/auth",        tags=["auth"])
 app.include_router(cameras.router,     prefix="/api/v1/cameras",     tags=["cameras"])

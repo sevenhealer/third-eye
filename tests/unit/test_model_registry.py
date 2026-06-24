@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from src.core.exceptions import ModelChecksumError, ModelLoadError
-from src.core.model_registry import ModelRegistry, compute_sha256, startup_verify
-
+from src.core.model_registry import (
+    DEFAULT_MANIFEST_PATH,
+    ModelRegistry,
+    compute_sha256,
+    startup_verify,
+)
 
 # ── compute_sha256 ────────────────────────────────────────────────────────────
 
@@ -211,3 +214,24 @@ class TestStartupVerify:
         f.write_bytes(b"tampered")
         with pytest.raises(ModelChecksumError):
             startup_verify(mpath)
+
+    def test_default_manifest_path_is_repo_relative(self):
+        # Must resolve to <repo>/models/manifest.json, never a hardcoded /app
+        # container path (which broke native runs).
+        assert DEFAULT_MANIFEST_PATH.name == "manifest.json"
+        assert DEFAULT_MANIFEST_PATH.parent.name == "models"
+        assert DEFAULT_MANIFEST_PATH.is_absolute()
+
+    def test_defaults_to_repo_manifest_when_arg_omitted(self, monkeypatch, tmp_path):
+        # startup_verify() with no argument must fall back to DEFAULT_MANIFEST_PATH.
+        reg = ModelRegistry()
+        f = tmp_path / "w.pt"
+        f.write_bytes(b"clean")
+        reg.sign("w", f)
+        fake_default = tmp_path / "manifest.json"
+        reg.save_manifest(fake_default)
+        monkeypatch.setattr(
+            "src.core.model_registry.DEFAULT_MANIFEST_PATH", fake_default
+        )
+        # No argument → uses patched default, must not raise.
+        startup_verify()

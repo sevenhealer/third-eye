@@ -1,5 +1,5 @@
 .PHONY: help up down logs shell test lint format check-env setup install install-gpu \
-        infra reset serve stop frontend-build fresh run certs bootstrap
+        infra reset serve stop frontend-build fresh run certs bootstrap sign-models
 
 COMPOSE = docker compose
 APP_SERVICE = api
@@ -24,6 +24,7 @@ help:
 	@echo "  make infra        Start just the infra containers"
 	@echo "  make certs        Generate a self-signed cert so serve uses HTTPS"
 	@echo "                    (needed for the webcam Enroll page over the LAN)"
+	@echo "  make sign-models  (Re-)sign model weights into a SHA-256 manifest"
 	@echo ""
 	@echo "  ── full containerized stack / ops ──"
 	@echo "  make setup        Generate/top-up .env with strong random secrets"
@@ -76,6 +77,8 @@ bootstrap:
 		     $(MAKE) $(if $(filter 1,$(HAS_GPU)),install-gpu,install); }
 	@test -d models/weights/models/buffalo_l \
 		|| { echo "→ downloading face models (~200 MB)"; .venv/bin/python scripts/download_models.py; }
+	@test -f models/manifest.json \
+		|| { echo "→ signing model weights (SHA-256 manifest)"; .venv/bin/python scripts/sign_models.py; }
 	$(COMPOSE) up -d $(INFRA_SERVICES)
 	@bash scripts/wait_for_pg.sh
 	@echo "→ applying DB migrations"
@@ -109,6 +112,11 @@ stop:
 
 certs:
 	@bash scripts/gen_certs.sh
+
+# (Re-)sign all present model weights into models/manifest.json. Run after a
+# deliberate weights update; bootstrap calls this automatically on first run.
+sign-models:
+	@.venv/bin/python scripts/sign_models.py
 
 # Serve HTTPS when a cert exists (so the webcam Enroll page works on the LAN),
 # otherwise plain HTTP. Either way, bound graceful shutdown.

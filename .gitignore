@@ -34,6 +34,11 @@ models/custom/*.pth
 !models/tensorrt/.gitkeep
 !models/custom/.gitkeep
 
+# Model-signing manifest (scripts/sign_models.py) — generated at bootstrap from
+# whatever weights are present locally; holds machine-specific absolute paths
+# and sign timestamps, so it's per-clone, not source.
+models/manifest.json
+
 # Auto-downloaded weights that land at repo root (e.g. `YOLO('yolo26m.pt')`
 # downloads to cwd) and weight caches outside models/ (e.g. CLIP for YOLO-World)
 /*.pt
